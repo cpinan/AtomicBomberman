@@ -1,0 +1,50 @@
+# The disc itself. 525 MB, copyrighted, and the whole point of tools/ and
+# docs/ORACLE.md is that the port is checkable against a copy anyone can drop
+# in here — never redistributed through this repo. AB_DATA overrides the
+# path if it lives somewhere else.
+/original-game/
+
+# Third-party reference ports (fpc_atomic, AtomBomberman, Atomic-Bomberman) —
+# not code this project wrote, and each is already its own git repository.
+# Given, read, cited (docs/ORACLE.md, docs/BUGS.md) — never vendored in.
+/git-reference-projects/
+
+# Build output. Regenerate with build_web.sh / build_server.sh.
+/build/
+
+# tools/extract.py's own output: machine-readable intermediates and the
+# extracted asset cache. Regenerate with `tools/extract.py`.
+/tools/out/
+/tools/__pycache__/
+__pycache__/
+*.pyc
+
+# Godot
+/godot-project/.godot/
+/godot-project/android/
+*.translation
+
+# Generated from the original's own data files by tools/*.py.
+#
+# NOT committed, deliberately. VALUELST.RES and the EXTRA*.RES files are
+# copyrighted by Interplay; the facts in them are not, but a generated file is
+# close enough to a transcription that the safe move is to regenerate on every
+# machine instead. verify.sh does it as its first step, so a fresh clone with
+# AB_DATA set is one command from green.
+/godot-project/scripts/core/values.gd
+/godot-project/scripts/core/extras.gd
+/godot-project/scripts/core/messages.gd
+
+# Extractor output — original art, audio and level data. Never committed,
+# never pushed. cd.bin and sfx.bin are the containers an export carries; the
+# loose directory beside them is debug output.
+/godot-project/data/packs/cd/
+/godot-project/data/packs/cd.bin
+/godot-project/data/packs/sfx/
+/godot-project/data/packs/sfx.bin
+
+# macOS
+.DS_Store
+
+# Claude Code's own project-local skill links — dev tooling, not game source.
+/.claude/

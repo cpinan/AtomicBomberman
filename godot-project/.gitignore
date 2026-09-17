@@ -1,0 +1,26 @@
+# Godot
+.godot/
+/android/
+*.translation
+
+# Generated from the original's own data files by ../tools/*.py.
+#
+# NOT committed, deliberately. VALUELST.RES and the EXTRA*.RES files are
+# copyrighted by Interplay; the facts in them are not, but a generated file is
+# close enough to a transcription that the safe move is to regenerate on every
+# machine instead. verify.sh does it as its first step, so a fresh clone with
+# AB_DATA set is one command from green.
+scripts/core/values.gd
+scripts/core/extras.gd
+scripts/core/messages.gd
+
+# Extractor output — original art, audio and level data. Never committed,
+# never pushed. cd.bin and sfx.bin are the containers an export carries; the
+# loose directory beside them is debug output.
+data/packs/cd/
+data/packs/cd.bin
+data/packs/sfx/
+data/packs/sfx.bin
+
+# macOS
+.DS_Store

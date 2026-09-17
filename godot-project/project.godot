@@ -1,0 +1,38 @@
+; Atomic Bomberman — Godot 4 port
+; Constants and level data are generated from the original's own files by
+; ../tools/*.py. See ../docs/PLAN.md and ../docs/ORACLE.md.
+config_version=5
+
+[application]
+
+config/name="Atomic Bomberman"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+run/main_scene="res://scenes/main.tscn"
+; A port that opens on the Godot splash is a port with a seam in it.
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0, 0, 0, 1)
+
+[display]
+
+; The original renders at 640x480 (fpc_atomic's GameWidth/GameHeight, and the
+; resolution its PCX backgrounds are authored at). The playfield sits at an
+; offset of (20, 66) inside that, 15x11 tiles of 40x36 px.
+window/size/viewport_width=640
+window/size/viewport_height=480
+; Only how big the desktop window opens — 2x. Does NOT change the viewport, so
+; every measurement still runs against 640x480.
+window/size/window_width_override=1280
+window/size/window_height_override=960
+window/stretch/mode="canvas_items"
+; Whole-number upscaling only. A fractional scale resamples the art and smears
+; the one-pixel edges that sprite hotspots are aligned to.
+window/stretch/scale_mode="integer"
+; "keep" letterboxes rather than revealing more world than the original showed.
+window/stretch/aspect="keep"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+; The art is 1997 pixel art. Any filtering is wrong.
+textures/canvas_textures/default_texture_filter=0

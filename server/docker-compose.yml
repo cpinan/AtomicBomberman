@@ -1,0 +1,61 @@
+# One command to host a game: docker compose up
+#
+# Two services, because a browser needs both: something to serve the page and
+# something to play against.
+#
+#   game    the authoritative simulation, over WebSocket
+#   web     the exported HTML5 client, as static files
+#
+# ---------------------------------------------------------------------------
+# THE ONE THING THAT WILL BITE YOU
+# ---------------------------------------------------------------------------
+# A page served over https:// CANNOT open a ws:// socket — browsers refuse it
+# as mixed content, and the failure looks like the server being down. Two ways
+# out, and the compose file below takes the first:
+#
+#   1. Serve the page over plain http://, so ws:// is allowed. Fine on a LAN
+#      or over a VPN, which is what most self-hosting is.
+#   2. Put both behind one TLS terminator and use wss://. Needed for anything
+#      reachable from the open internet. See server/README.md.
+#
+# docs/PLAN.md flagged this before the compose file was written, on purpose.
+services:
+  game:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: atomic-bomberman-server
+    restart: unless-stopped
+    environment:
+      AB_PORT: 47600
+      AB_SCHEME: /srv/schemes/basic.sch
+      AB_LEVEL: 0
+      # Bots fill the other seats, so the first person to join has something to
+      # play against and an empty server is still a game in progress. A bot
+      # gives up its seat when a human arrives.
+      AB_BOTS: 4
+      # 0 keeps VALUELST resource 310's default of two wins per match.
+      AB_WINS: 0
+    ports:
+      - "47600:47600"
+    # The simulation is a fixed 20 Hz over 165 cells; it does not need much.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+
+  web:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      # Built by tools/build_web.sh. Read-only: nginx has no business writing
+      # to the game client.
+      - ../build/web:/usr/share/nginx/html:ro
+      # Without this, nginx serves the 38 MB .wasm uncompressed: its default
+      # gzip_types is text/html and nothing else. See server/nginx.conf.
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - game

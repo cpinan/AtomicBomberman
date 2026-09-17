@@ -1,0 +1,2227 @@
+# The authoritative simulation. No rendering, no scene tree, no clock.
+#
+# ---------------------------------------------------------------------------
+# Two decisions govern everything in this file.
+# ---------------------------------------------------------------------------
+#
+# 1. 20 Hz, fixed. VALUELST resource 30 is the rate the game attempts and
+#    resource 25 is the rate every frame-count in the tuning table is expressed
+#    against; both are 20. So one tick is 50 ms and a "frames" value from the
+#    table IS a tick count — a 40-frame fuze is 40 ticks, and no conversion
+#    exists to get wrong. fpc_atomic simulates at 100 Hz; that is its own
+#    invention. docs/ORACLE.md section 1.
+#
+# 2. Integers only. Position is in centipixels — hundredths of a pixel — which
+#    is the unit the tuning table already uses for speed. A tick is therefore
+#    `x += speed`, one integer add, with no rounding and no drift. There is not
+#    a single float in the simulation.
+#
+#    This is not fastidiousness. Phase 5 broadcasts state 50 times a second and
+#    asserts every client's state_hash() matches the server's; Track C diffs
+#    this engine against a C oracle tick by tick. Both of those are exact-match
+#    tests, and a float sim would fail them for reasons that have nothing to do
+#    with the game.
+#
+# tick() takes no delta and reads no clock, so a test can step it 40 times and
+# assert on tick 40. advance() is the only thing that knows about wall time.
+extends RefCounted
+
+const Const_ := preload("res://scripts/core/const.gd")
+const Types_ := preload("res://scripts/core/types.gd")
+const Values_ := preload("res://scripts/core/values.gd")
+const Field_ := preload("res://scripts/sim/field.gd")
+const Player_ := preload("res://scripts/sim/player.gd")
+const Bomb_ := preload("res://scripts/sim/bomb.gd")
+const Ai_ := preload("res://scripts/sim/ai.gd")
+const Stats_ := preload("res://scripts/core/stats.gd")
+const Creature_ := preload("res://scripts/sim/creature.gd")
+
+const CP := Player_.CP
+const TILE_W_CP := Player_.TILE_W_CP
+const TILE_H_CP := Player_.TILE_H_CP
+
+## How many death animations the disc has — VALUELST 105, and the seventeen
+## XPLODE files hold exactly that many named sequences.
+const DEATH_ANIMS := 24
+
+## How long the kicking animation is held for, in ticks. KICK.ANI has four
+## frames per direction and the disc states no duration, so this is the port's.
+const KICK_ANIM_TICKS := 6
+
+## And for PUNCH.ANI, which has ten frames per direction. Same reasoning: the
+## disc states no duration, so this is the port's, and it is long enough for
+## the swing to read at 20 Hz.
+const PUNCH_ANIM_TICKS := 8
+
+## How long a killed player stays on the field before it is gone, in ticks.
+##
+## The disc gives no such value. fpc_atomic does — `AtomicDieTimeout = 5000`,
+## "the time in ms that is waited until the game ends after the last dying
+## player" — and 5 s is 100 ticks, which is also longer than the longest death
+## animation the disc ships (XPLODE4's "die green 4", 93 steps). So every one
+## of the 24 gets to finish, and then the body is gone rather than lying there
+## for the rest of the round with a shadow under it.
+const DEATH_TICKS := 100
+
+## At most one bomb per cell, so the field size is also the hard cap.
+const MAX_BOMBS := Const_.FIELD_W * Const_.FIELD_H
+
+var field: Field_ = null
+var players: Array = []
+var bombs: Array = []
+
+var tick_count: int = 0
+
+## Ticks left in the round. Resource 100 gives the default length in seconds
+## (150) and the round ends when this reaches zero even if players survive.
+var time_left: int = 0
+
+## How far the closing wall has advanced, or -1 when Hurry is not running.
+## Resource 101 starts Hurry at 60 seconds remaining and its comment says not
+## to change that value.
+var hurry_index: int = -1
+
+## Set once the round is over, with why. The caller reads this and moves on;
+## the simulation keeps ticking so death animations can finish.
+enum Outcome { RUNNING, LAST_STANDING, DRAW, TIME_UP }
+var outcome: int = Outcome.RUNNING
+var winner_slot: int = -1
+var winner_team: int = Types_.TEAM_UNSET
+
+## Ticks since the round ended, so the caller knows when the animations are
+## done. fpc_atomic waits 5 s; the original has no resource for it, so the
+## caller decides.
+var ticks_since_over: int = 0
+
+## True when teams are being scored rather than individuals.
+var team_play: bool = false
+
+## Seeded explicitly so a round is reproducible from its seed alone. Godot's
+## RandomNumberGenerator is PCG32 and gives the same stream everywhere, which
+## is what makes the server's layout reproducible on a client for replay.
+var rng := RandomNumberGenerator.new()
+var seed_used: int = 0
+
+# Values read once at setup rather than per tick. They cannot change during a
+# round, and re-reading a Dictionary 20 times a second for a constant is waste.
+var _fuze_ticks: int = 0
+var _flame_ticks: int = 0
+var _brick_ticks: int = 0
+
+var _accum_ms: int = 0
+
+## Cells that have had a bomb detonate on them this tick, so the chain
+## resolution pass cannot loop.
+var _pending: Array[int] = []
+
+## "you are now AWESOME (7th powerup and 3rd thereafter)" — SOUNDLST's own
+## description of its 1400..1699 range, and the only statement anywhere on the
+## disc about when that sound plays. There is no VALUELST resource for either
+## number, so they live here rather than in a generated table.
+const AWESOME_AT := 7
+const AWESOME_EVERY := 3
+
+## The scheme this round was laid out from. See setup().
+var scheme_used: RefCounted = null
+
+## Sound events raised this tick, as {"slot": int, "effect": Types.SoundEffect}.
+## The simulation never plays anything — it records what happened, the renderer
+## plays it, and Phase 5 puts the same list on the wire. Cleared every tick, so
+## a client that misses one has simply missed it, which is correct: a sound is
+## not state.
+var sounds: Array[Dictionary] = []
+
+
+## Raise a sound event. `arg` carries whatever the effect needs to name a
+## specific sound — for DISEASE_CAUGHT it is the disease, because SOUNDLST has
+## twelve per-disease ranges at 3000 + 50*i and the generic one is a fallback.
+func _play(slot: int, effect: int, arg: int = 0) -> void:
+	sounds.append({"slot": slot, "effect": effect, "arg": arg})
+
+
+## Start a round. `slots` is an array of {"slot": int, "team": int} naming who
+## is playing; their start cells come from the scheme.
+## Which slots are played by a bot. A bot decides its own input at the top of
+## every tick, from the simulation's own state and the seeded RNG — so a bot
+## game replays exactly like any other, and a client watching one sees the same
+## thing the server does without the bots being simulated twice.
+var bot_slots: Dictionary = {}
+var _ai: Ai_ = null
+
+## The statistics counters, or null. Deliberately NOT part of the simulation's
+## state: nothing here is hashed, snapshotted or sent, so a client counting its
+## own bombs cannot make its state hash differ from the server's. The original
+## counted what the machine in front of the player did, and so does this.
+var stats = null
+
+## Random Start — MESSAGES.TXT 251, and OPTIONS.BM: "player start positions
+## will be randomized at the beginning of the match". The permutation is drawn
+## from start_seed rather than from this round's seed, so it is the MATCH that
+## is randomised and not each round; the caller sets start_seed once, from the
+## match's first seed. A separate generator, not this simulation's `rng`,
+## because drawing from that one would move the layout and the powerup scatter
+## along with the positions.
+##
+## OPTIONS.BM also says a team scheme should be played with this off. It is the
+## player's choice, so nothing here refuses it.
+##
+## The DEFAULT is the disc's, and it is ON: VALUELST resource 40 is "default
+## value of \"do we randomize player starting positions?\"" and it is 1.
+## The field is initialised from the resource, so a caller that says nothing
+## gets the original's behaviour rather than this file's.
+var random_start: bool = Values_.V[Const_.Res.RANDOM_START] != 0
+var start_seed: int = 0
+
+## Kills this round, per slot, for the Win Matches By Kill Total option
+## (MESSAGES.TXT 255). Net of suicides: OPTIONS.BM says "if you kill yourself
+## with your own bomb, your kill count will go down by 1", so it can go
+## negative. Not part of state_hash() and not snapshotted — the server owns the
+## win condition, and a client only ever needs to be told who won.
+var round_kills: PackedInt32Array = PackedInt32Array()
+
+## Campaign mode's rovers and ghosts. Empty in every ordinary round, which is
+## why nothing else in this file has to know about them. scripts/sim/creature.gd
+## says where they come from and what had to be decided.
+var creatures: Array = []
+
+## Points scored this round, per slot — VALUELST 1300/1310/1320, and campaign
+## mode is the only thing that reads it.
+var round_score: PackedInt32Array = PackedInt32Array()
+
+
+func add_bot(slot: int) -> void:
+	bot_slots[slot] = true
+	if _ai == null:
+		_ai = Ai_.new()
+	var p := player_by_slot(slot)
+	if p != null:
+		p.in_play = true
+		p.alive = true
+
+
+func is_bot(slot: int) -> bool:
+	return bot_slots.has(slot)
+
+
+func bot_count() -> int:
+	return bot_slots.size()
+
+
+## Which level's specials this round uses. Set before setup(); the client gets
+## it in its welcome so both sides build identical geometry.
+var level: int = 0
+
+
+func setup(scheme: RefCounted, slots: Array, round_seed: int = 0) -> void:
+	# Kept so a second round can be laid out without the caller having to hold
+	# the scheme too. Not simulation state: it never enters state_hash() and
+	# never travels — the scheme's TEXT is what the wire carries.
+	scheme_used = scheme
+	seed_used = round_seed
+	_apply_defaults()
+	_hurry_path_cache = []
+	rng.seed = round_seed
+	tick_count = 0
+	_accum_ms = 0
+	time_left = Values_.V[Const_.Res.ROUND_SECONDS] * Const_.TICK_HZ
+	hurry_index = -1
+	outcome = Outcome.RUNNING
+	winner_slot = -1
+	winner_team = Types_.TEAM_UNSET
+	ticks_since_over = 0
+	bombs = []
+	players = []
+	creatures = []
+	round_kills = PackedInt32Array()
+	round_kills.resize(Const_.PLAYER_COUNT)
+	round_score = PackedInt32Array()
+	round_score.resize(Const_.PLAYER_COUNT)
+
+	_fuze_ticks = Values_.V[Const_.Res.FUZE_FRAMES]
+	_flame_ticks = Values_.V[Const_.Res.FLAME_ANIM_FRAMES]
+	_brick_ticks = Values_.V[Const_.Res.BRICK_ANIM_FRAMES]
+
+	# Random Start permutes which start cell each playing slot gets. Positions
+	# only: a slot keeps its own team, so a team game stays two teams however
+	# the corners are dealt out.
+	var start_order := []
+	for i in slots.size():
+		start_order.append(i)
+	if random_start and slots.size() > 1:
+		var srng := RandomNumberGenerator.new()
+		srng.seed = start_seed ^ 0x57A27
+		for i in range(start_order.size() - 1, 0, -1):
+			var j := srng.randi_range(0, i)
+			var swap = start_order[i]
+			start_order[i] = start_order[j]
+			start_order[j] = swap
+
+	var start_cells := []
+	var entry_index := -1
+	for entry in slots:
+		entry_index += 1
+		var slot: int = entry["slot"]
+		# The cell this slot starts on, which Random Start may have dealt to
+		# somebody else; and the slot's OWN scheme row, which is where a team
+		# comes from when the caller did not name one. Keeping them apart is
+		# what stops a shuffle from also shuffling the teams.
+		var start: Dictionary = scheme.starts[
+			slots[start_order[entry_index]]["slot"]]
+		var own: Dictionary = scheme.starts[slot]
+		var p: Player_ = Player_.new()
+		p.slot = slot
+		p.team = entry.get("team", own.get("team", Types_.TEAM_UNSET))
+		p.speed = Values_.V[Const_.Res.START_SPEED]
+		p.speed_before_slow = p.speed
+		p.flame_len = Values_.V[Const_.Res.BORN_WITH_BASE + Types_.PowerUp.FLAME]
+		p.bombs_available = Values_.V[Const_.Res.BORN_WITH_BASE + Types_.PowerUp.BOMB]
+		p.bombs_total = p.bombs_available
+		# On top of the VALUELST loadout, the scheme's -P rows can grant
+		# powerups at birth. AtomBomberman's notes on the format: "bornwith -
+		# how many has at start (doesnt include the default 1 bomb & 2 flames)",
+		# so these ADD to the table's defaults rather than replacing them.
+		for which in Const_.POWERUP_COUNT:
+			var row: Dictionary = scheme.powerups[which]
+			for _n in int(row.get("born_with", 0)):
+				give_powerup(p, which)
+		p.place_at_tile_centre(start["x"], start["y"])
+		players.append(p)
+		start_cells.append({"x": start["x"], "y": start["y"]})
+
+	field = Field_.new()
+	field.initialize(scheme, start_cells, rng)
+	# The level's arrows, conveyors, warps and trampolines. Built here from the
+	# level number and the seed, on the server and on every client alike, so
+	# they never travel on the wire — see field.gd's plane declarations.
+	field.load_extras(level, start_cells, rng)
+
+
+## The tuning-table durations this round is running with. Exposed so the
+## renderer can drive an animation's progress from the same numbers the
+## simulation times it with, rather than keeping a second copy.
+func flame_ticks() -> int:
+	return _flame_ticks
+
+
+func brick_anim_ticks() -> int:
+	return _brick_ticks
+
+
+func fuze_ticks() -> int:
+	return _fuze_ticks
+
+
+func set_input(slot: int, move: int, action: int = Types_.Action.NONE) -> void:
+	var p := player_by_slot(slot)
+	if p == null:
+		return
+	# A DEAD PLAYER TAKES NO INPUT. kill() sets move to STILL, and this used to
+	# hand it back on the very next tick, because main.gd calls this once per
+	# tick for every keyset whatever is happening on the field. The simulation
+	# ignores a dying player's move, so nothing walked — but the VIEW picks the
+	# walk sheet whenever move is not STILL, so a corpse jogged on the spot for
+	# as long as the key was held. That is "the player still moves".
+	if not p.alive or p.dying:
+		return
+	p.move = move
+	p.action = action
+
+
+func player_by_slot(slot: int) -> Player_:
+	for p in players:
+		if p.slot == slot:
+			return p
+	return null
+
+
+func living_players() -> int:
+	var n := 0
+	for p in players:
+		if p.alive and not p.dying:
+			n += 1
+	return n
+
+
+## Advance by wall-clock milliseconds, running whole ticks only and keeping the
+## remainder. Returns how many ticks ran.
+##
+## A single call is clamped to resource 31 — 150 ms, which is 3 ticks. The
+## original's comment on that value says why:
+##
+##     what is the maximum milliseconds the game can advance in any given
+##     "frame."  this prevents a disk hit from moving everybody a whole
+##     huge distance on the screen and screwing things up.
+##
+## Time beyond the clamp is DISCARDED, not banked. Banking it would reproduce
+## the stall on the next call and turn one hitch into a cascade.
+func advance(delta_ms: int) -> int:
+	var budget: int = mini(delta_ms, Values_.V[Const_.Res.MAX_ADVANCE_MS])
+	_accum_ms += budget
+	var ran := 0
+	while _accum_ms >= Const_.TICK_MS:
+		_accum_ms -= Const_.TICK_MS
+		tick()
+		ran += 1
+	return ran
+
+
+## Exactly one 50 ms step.
+##
+## Order matters and is the same order fpc_atomic's CreateNewFrame uses, because
+## it is the order the effects depend on: a player must move before we ask
+## whether they walked into a flame, and bombs must be resolved before the
+## flames they created are aged.
+func tick() -> void:
+	tick_count += 1
+	sounds.clear()
+
+	# Bots choose their input first, so the rest of the tick cannot tell a bot
+	# from a human. Their decisions read only committed state and the seeded
+	# RNG, which is what keeps a bot round reproducible.
+	if _ai != null:
+		for p in players:
+			if not bot_slots.has(p.slot):
+				continue
+			if not p.in_play or not p.alive or p.dying:
+				continue
+			var choice := _ai.think(self, p)
+			p.move = int(choice["move"])
+			p.action = int(choice["action"])
+
+	# Age LAST tick's flames and animations before this tick's logic, never
+	# after it. Ageing at the end would decrement a flame on the very tick it
+	# was created, so resource 10's "10 frames" would burn for nine ticks. The
+	# durations in the tuning table are the whole point of matching the
+	# original's 20 Hz, and an off-by-one here quietly discards that.
+	field.tick_timers()
+
+	for p in players:
+		if p.alive and not p.dying:
+			if p.kick_ticks > 0:
+				p.kick_ticks -= 1
+			if p.punch_ticks > 0:
+				p.punch_ticks -= 1
+			_move_player(p)
+
+	# The field acting on the players, after they have moved: a conveyor
+	# carries whoever ENDED the tick on it, and a gate takes whoever stepped
+	# onto it.
+	for p in players:
+		if p.alive and not p.dying:
+			_field_vs_player(p)
+
+	for p in players:
+		if p.alive and not p.dying:
+			_player_action(p)
+
+	# Collection happens after movement: stepping onto a powerup this tick
+	# picks it up this tick.
+	for p in players:
+		if p.alive and not p.dying:
+			_collect_powerup(p)
+
+	_move_bombs()
+	_tick_bombs()
+
+	# After movement and after this tick's flames exist, so a player who walks
+	# into a standing flame and a player this tick's blast reaches both die on
+	# the same tick.
+	for p in players:
+		if p.alive and not p.dying:
+			_check_flame_death(p)
+
+	# The campaign's monsters move after the players and before the round is
+	# judged: a rover that walks onto a player kills them this tick, and a
+	# ghost caught by this tick's flame dies on it.
+	if not creatures.is_empty():
+		_tick_creatures()
+
+	_tick_diseases()
+	_tick_field()
+	_tick_round()
+
+
+# ---------------------------------------------------------------------------
+# Movement
+# ---------------------------------------------------------------------------
+#
+# ASSUMED ALGORITHM — docs/BUGS.md Q5.1. The original's speed is known
+# (resource 42) but its corner-rounding rule is not, and it cannot be inferred
+# from a speed: the original moves in pixels on 40x36 cells, so the same speed
+# crosses a row faster than a column (ORACLE row 2). Settling this needs BM.EXE.
+#
+# What is implemented, and why each part:
+#
+#   One axis at a time. AtomBomberman's notes: "bomberman can only move in one
+#   direction at a time". The input layer picks the direction; this only ever
+#   sees one.
+#
+#   A cell-sized collision box centred on the player. The box spans one cell,
+#   so movement stops when the box would overlap a blocked cell — which puts
+#   the player's centre at the centre of the last open cell. In an open
+#   corridor there is no constraint at all, so movement is free until the wall.
+#   This has no invented constants in it, which is the reason for choosing it:
+#   a radius or a margin would be a number the oracle cannot check.
+#
+#   Cross-axis re-centring, by up to `speed` per tick. The notes again: "the
+#   game corrects the position itself i guess to help the player". Without it a
+#   player who is a few centipixels off-centre is blocked by walls they are
+#   visually clear of.
+func _move_player(p: Player_) -> void:
+	if p.move == Types_.MoveState.STILL:
+		return
+
+	# CONTROLS_REVERSED flips the input before anything acts on it, so every
+	# consequence — facing, kicking, where a bomb is thrown — is reversed too.
+	var move := p.move
+	if p.has_disease(Types_.Disease.CONTROLS_REVERSED):
+		move = _reverse_move(move)
+
+	var dir := _move_to_dir(move)
+	p.facing = dir
+	var step: Vector2i = Types_.DIR_VEC[dir]
+
+	# Resource 665: the player is frozen for 2 frames after picking a bomb up.
+	if p.pickup_pause > 0:
+		p.pickup_pause -= 1
+		return
+
+	# Walking into a bomb kicks it, if the player has the kicker. Tried before
+	# moving, because the kick is what happens INSTEAD of being blocked.
+	if p.can_kick:
+		var ahead := bomb_at(p.tile_x() + step.x, p.tile_y() + step.y)
+		if ahead != null and ahead.at_rest():
+			kick_bomb(p)
+
+	var was := Vector2i(p.x, p.y)
+	if step.x != 0:
+		_recentre_y(p)
+		p.x = _slide_x(p, step.x * p.speed)
+	else:
+		_recentre_x(p)
+		p.y = _slide_y(p, step.y * p.speed)
+	if stats != null:
+		# Both axes, because re-centring moves the other one. Counter 918 is
+		# "Total Pixel Distances Run" and re-centring is running.
+		stats.add_distance_cp(absi(p.x - was.x) + absi(p.y - was.y))
+
+
+func _recentre_x(p: Player_) -> void:
+	var off := p.offset_x()
+	if off == 0:
+		return
+	var pull: int = mini(absi(off), p.speed)
+	p.x -= pull if off > 0 else -pull
+
+
+func _recentre_y(p: Player_) -> void:
+	var off := p.offset_y()
+	if off == 0:
+		return
+	var pull: int = mini(absi(off), p.speed)
+	p.y -= pull if off > 0 else -pull
+
+
+## Move horizontally as far as the cell-sized box allows, and return the new x.
+func _slide_x(p: Player_, delta: int) -> int:
+	var want: int = p.x + delta
+	# The rows the box touches. When re-centring has not finished the box spans
+	# two rows and BOTH must be clear, which is what stops a player cutting a
+	# corner diagonally.
+	var top_row: int = (p.y - TILE_H_CP / 2) / TILE_H_CP
+	var bottom_row: int = (p.y + TILE_H_CP / 2 - 1) / TILE_H_CP
+
+	if delta > 0:
+		var edge: int = want + TILE_W_CP / 2 - 1
+		var col: int = edge / TILE_W_CP
+		for row in range(top_row, bottom_row + 1):
+			if _player_blocked(col, row):
+				# Stop with the box flush against the blocked cell.
+				return col * TILE_W_CP - TILE_W_CP / 2
+	else:
+		var edge: int = want - TILE_W_CP / 2
+		var col: int = _floor_div(edge, TILE_W_CP)
+		for row in range(top_row, bottom_row + 1):
+			if _player_blocked(col, row):
+				return (col + 1) * TILE_W_CP + TILE_W_CP / 2
+	return want
+
+
+func _slide_y(p: Player_, delta: int) -> int:
+	var want: int = p.y + delta
+	var left_col: int = (p.x - TILE_W_CP / 2) / TILE_W_CP
+	var right_col: int = (p.x + TILE_W_CP / 2 - 1) / TILE_W_CP
+
+	if delta > 0:
+		var edge: int = want + TILE_H_CP / 2 - 1
+		var row: int = edge / TILE_H_CP
+		for col in range(left_col, right_col + 1):
+			if _player_blocked(col, row):
+				return row * TILE_H_CP - TILE_H_CP / 2
+	else:
+		var edge: int = want - TILE_H_CP / 2
+		var row: int = _floor_div(edge, TILE_H_CP)
+		for col in range(left_col, right_col + 1):
+			if _player_blocked(col, row):
+				return (row + 1) * TILE_H_CP + TILE_H_CP / 2
+	return want
+
+
+## Integer division that floors for negatives too. GDScript's `/` truncates
+## toward zero, so -1 / 4000 is 0 and the cell left of the field would read as
+## cell 0 — which would let a player walk out through the left wall.
+static func _floor_div(a: int, b: int) -> int:
+	var q := a / b
+	if (a % b) != 0 and ((a < 0) != (b < 0)):
+		q -= 1
+	return q
+
+
+static func _reverse_move(move: int) -> int:
+	match move:
+		Types_.MoveState.LEFT: return Types_.MoveState.RIGHT
+		Types_.MoveState.RIGHT: return Types_.MoveState.LEFT
+		Types_.MoveState.UP: return Types_.MoveState.DOWN
+		Types_.MoveState.DOWN: return Types_.MoveState.UP
+	return move
+
+
+static func _move_to_dir(move: int) -> int:
+	match move:
+		Types_.MoveState.LEFT: return Types_.Dir.LEFT
+		Types_.MoveState.RIGHT: return Types_.Dir.RIGHT
+		Types_.MoveState.UP: return Types_.Dir.UP
+		Types_.MoveState.DOWN: return Types_.Dir.DOWN
+	return Types_.Dir.NONE
+
+
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+## Dispatch this tick's action.
+##
+## The mapping is the MANUAL's, which describes the two buttons and what a
+## double-press does:
+##
+##   first action          place a bomb
+##   first, double-pressed grab and throw, or spooge — whichever the player has
+##   second action         trigger every own triggerable bomb; or punch the
+##                         bomb ahead, if walking into one
+##
+## Grab and spooge are mutually exclusive by the powerups themselves (taking
+## the grab disables spooging), so one button serves both.
+func _player_action(p: Player_) -> void:
+	match p.action:
+		Types_.Action.FIRST:
+			# THE DISC'S OWN RULE, from MANUAL.BM: "To drop a bomb, press this
+			# button. Otherwise, this button is used to drop a Spooge and
+			# Grab/Throw a bomb. PRESS THE BUTTON AGAIN AFTER DROPPING A BOMB
+			# to do either if you have the appropriate powerup."
+			#
+			# So it is one button and the SECOND press does the other thing —
+			# not a timed double-tap and not a separate key. A press that
+			# cannot place a bomb (one is already on this cell, or none are
+			# left) falls through to throw, then grab, then spooge.
+			#
+			# This used to require Action.FIRST_DOUBLE, which nothing in the
+			# game ever produced: grab, throw and spooge were unreachable for a
+			# human player and only tests could call them.
+			if place_bomb(p) != null:
+				_play(p.slot, Types_.SoundEffect.BOMB_DROP)
+			elif not throw_bomb(p):
+				if p.can_grab:
+					grab_bomb(p)
+				elif p.can_spooge:
+					spooge(p)
+
+		Types_.Action.FIRST_DOUBLE:
+			# Still honoured for a caller that says exactly what it means.
+			if not throw_bomb(p):
+				if p.can_grab:
+					grab_bomb(p)
+				elif p.can_spooge:
+					spooge(p)
+
+		Types_.Action.SECOND:
+			# MANUAL.BM gives this button three jobs and this is their order of
+			# specificity: stop a bomb you kicked, punch the one in front of
+			# you, then trigger. "if your bomberman has the Kick powerup, press
+			# the action button to stop a kicked bomb... if you have the Boxing
+			# Glove, you can punch bombs in front of you... Finally, you can
+			# activate a Trigger bomb."
+			if not stop_bomb(p):
+				if not punch_bomb(p):
+					trigger_bombs(p)
+
+	p.action = Types_.Action.NONE
+
+
+## Place a bomb on the centre of the player's cell. Returns the bomb, or null
+## if it could not be placed.
+func place_bomb(p: Player_) -> Bomb_:
+	if p.bombs_available <= 0:
+		return null
+	# CONSTIPATION: no bombs at all while it lasts. VALUELST 0.12009's own
+	# changelog notes the edge case — a bomb refused by the disease must not
+	# pop out the moment the disease ends, and it does not here because nothing
+	# is queued.
+	if p.has_disease(Types_.Disease.CONSTIPATION):
+		return null
+	var tx := p.tile_x()
+	var ty := p.tile_y()
+	if bomb_at(tx, ty) != null:
+		return null
+	if bombs.size() >= MAX_BOMBS:
+		return null
+
+	var b: Bomb_ = Bomb_.new()
+	b.place_at_tile_centre(tx, ty)
+	b.owner = p.slot
+	b.chain_owner = p.slot
+	b.placed_tick = tick_count
+	# Copied now, not read at detonation: a flame powerup collected after the
+	# drop must not lengthen this bomb's blast. SHORT_FLAME cuts it here for
+	# the same reason.
+	b.flame_len = 1 if p.has_disease(Types_.Disease.SHORT_FLAME) else p.flame_len
+
+	if p.trigger_bombs > 0:
+		# A trigger bomb waits for its owner's second action rather than
+		# burning down. Resource 322's AtomicTimeTriggeredBombTimeOut has no
+		# equivalent in VALUELST, so it simply waits.
+		b.triggered = true
+		b.fuze = _fuze_ticks
+		p.trigger_bombs -= 1
+	elif p.has_disease(Types_.Disease.SHORT_FUZE):
+		# Almost immediate. A quarter of the normal fuze; the exact figure is
+		# not in the table, so it is a guess and flagged as one.
+		b.fuze = maxi(1, _fuze_ticks / 4)
+	else:
+		b.fuze = _fuze_ticks
+
+	# DUDS: resource 322 makes it a 1-in-3 chance that the bomb is a dud, and
+	# 323/324 that it then waits 120 + rand(200) frames before going off.
+	if p.has_disease(Types_.Disease.DUDS):
+		if rng.randi_range(1, Values_.V[Const_.Res.DUD_CHANCE]) == 1:
+			b.state = Types_.BombState.DUD
+			b.fuze = Values_.V[Const_.Res.DUD_WAIT_FRAMES] \
+				+ rng.randi_range(0, Values_.V[Const_.Res.DUD_WAIT_RAND_FRAMES])
+
+	bombs.append(b)
+	p.bombs_available -= 1
+	if stats != null:
+		stats.bump(Stats_.C.BOMBS_DROPPED)
+	return b
+
+
+## The bomb on a cell, if any. A flying or carried bomb is not ON a cell, so it
+## is not returned — which is what lets a player walk under a thrown bomb.
+func bomb_at(tx: int, ty: int) -> Bomb_:
+	for b in bombs:
+		if b.detonated or b.flying or b.carried_by >= 0:
+			continue
+		if b.tile_x() == tx and b.tile_y() == ty:
+			return b
+	return null
+
+
+# ---------------------------------------------------------------------------
+# Bombs and flame
+# ---------------------------------------------------------------------------
+func _tick_bombs() -> void:
+	# 1. Burn fuzes and collect what goes off this tick.
+	_pending.clear()
+	for i in bombs.size():
+		var b: Bomb_ = bombs[i]
+		if b.detonated:
+			continue
+		# A bomb placed during THIS tick does not burn this tick. Without
+		# this, a bomb dropped through the input path burns a tick that a
+		# bomb placed by a direct call does not, and the two paths disagree
+		# about when a 40-frame fuze runs out.
+		if b.placed_tick == tick_count:
+			continue
+		# A CARRIED bomb's fuze stops. AtomBomberman's notes: "when its picked
+		# up its not even ticking (starts ticking when it falls)".
+		if b.carried_by >= 0:
+			continue
+		# A TRIGGER bomb waits for its owner's signal instead of burning down.
+		# If the owner dies it reverts to an ordinary bomb, or it would sit on
+		# the field for the rest of the round with nobody able to fire it —
+		# fpc_atomic reaches the same conclusion via a 15-second timeout, which
+		# VALUELST has no resource for. A guess, and the only one here.
+		if b.triggered:
+			var owner_p := player_by_slot(b.owner)
+			if owner_p != null and owner_p.alive and not owner_p.dying:
+				continue
+			b.triggered = false
+		b.fuze -= 1
+		if b.fuze <= 0:
+			b.detonated = true
+			_pending.append(i)
+
+	# 2. A bomb caught by a flame goes off in the same tick, and can catch
+	#    further bombs. Resolve to a fixed point rather than over several ticks,
+	#    so a chain of any length is instantaneous — which is what the original
+	#    looks like, and what makes a chain's outcome independent of the order
+	#    bombs happen to sit in the array.
+	var cursor := 0
+	while cursor < _pending.size():
+		var b: Bomb_ = bombs[_pending[cursor]]
+		cursor += 1
+		_explode(b)
+
+	# 3. Give the bombs back and drop them from the list.
+	var keep := []
+	for b in bombs:
+		if b.detonated:
+			var owner := player_by_slot(b.owner)
+			if owner != null:
+				owner.bombs_available = mini(owner.bombs_available + 1,
+					owner.bombs_total)
+		else:
+			keep.append(b)
+	bombs = keep
+
+
+func _explode(b: Bomb_) -> void:
+	# One per bomb, so a chain reaction raises one per link. The mixer collapses
+	# a tick's worth into a single voice — see scripts/audio/sfx.gd rule 1 —
+	# because eight copies of one explosion 0 ms apart is not eight explosions.
+	_play(b.chain_owner, Types_.SoundEffect.BOMB_EXPLODE)
+
+	# The epicentre always burns. The original writes it once per direction,
+	# inside the loop below (0x424008) — four identical writes, since the write
+	# memsets the cell record and fills it in again. Once is the same result.
+	field.add_flame(b.tile_x(), b.tile_y(), Types_.Flame.CROSS, b.chain_owner,
+		_flame_ticks)
+
+	# ARM ORDER IS THE ORIGINAL'S, and it is the direction table's own:
+	# 0x45BECC/0x45BEDC are (0,-1) (1,0) (0,1) (-1,0) — up, right, down, left —
+	# and 0x423FA4's loop walks each arm to its end before starting the next.
+	# It matters wherever two arms reach one cell: the LAST arm to write owns
+	# the flame, and that decides who gets the kill.
+	for dir in [Types_.Dir.UP, Types_.Dir.RIGHT, Types_.Dir.DOWN,
+			Types_.Dir.LEFT]:
+		# A bomb lit by another bomb does not fire back down the arm that lit
+		# it — the original skips that direction outright (0x423FA4).
+		if dir == b.blocked_dir:
+			continue
+		_propagate(b, dir)
+
+
+## Walk one arm of the cross outward from a bomb.
+##
+## Stop rules, in the order they are tested:
+##   solid    no flame on the cell, arm ends
+##   brick    flame on the cell, brick destroyed, arm ends
+##   powerup  flame on the cell, powerup destroyed, arm ends
+##            — AtomBomberman's notes: flames "are stopped by blocks
+##              (indestructible & destructible) and by powerups"
+##   bomb     NO flame on the cell, that bomb detonates too, arm ENDS — the
+##            chained bomb paints that cell itself, as its own epicentre, and
+##            is told not to fire back the way the arm came
+##   open     flame on the cell, arm continues
+##
+## Read out of `BM95.EXE` at 0x423FA4-0x424287 rather than reconstructed; the
+## order of the tests is the original's too, bomb before powerup before cell.
+## docs/BUGS.md Q5.3.
+func _propagate(b: Bomb_, dir: int) -> void:
+	var step: Vector2i = Types_.DIR_VEC[dir]
+	var arm: int = _arm_flag(dir)
+
+	for n in range(1, b.flame_len + 1):
+		var x: int = b.tile_x() + step.x * n
+		var y: int = b.tile_y() + step.y * n
+
+		if not Field_.in_bounds(x, y):
+			return
+
+		# A bomb first, and it takes the cell: the original paints no flame
+		# there (0x4240E0 jumps straight to the end of the arm) because the
+		# bomb it just lit will paint that cell as its own epicentre in this
+		# same tick.
+		var other := bomb_at(x, y)
+		if other != null:
+			# The chain's ORIGINATING owner carries through, so the player who
+			# started it gets the kill even three bombs down the line. The
+			# original copies the same field, +0x3e, at 0x4240E9.
+			other.chain_owner = b.chain_owner
+			# And tells it not to fire back down this arm: 0x4240FA computes
+			# (d + 2) & 3, which is the opposite direction.
+			other.blocked_dir = _opposite(dir)
+			other.detonated = true
+			_pending.append(bombs.find(other))
+			return
+
+		# EXPOSED powerups only. field.gd hides a powerup UNDER a brick until
+		# that brick is destroyed — "Hide powerups under the destructible
+		# bricks" — so a cell can have has_powerup() true while brick_at() is
+		# still BRICK, a combination the original's own memory layout never
+		# produces (there the powerup flag is set only once the brick is
+		# already gone). Testing has_powerup() first, as the disassembly does
+		# for the original's data model, meant a brick hiding a powerup ate
+		# the flame on its hidden powerup and never got destroyed at all —
+		# same complaint from D27/D28 photographed live, "bombs sometimes do
+		# not destroy walls": every brick VALUELST happened to hide a powerup
+		# under needed two hits, one wasted on a powerup nobody ever saw. The
+		# `brick_at` guard here is the port's own fix for its own storage
+		# choice, not a change to the original's tested order below.
+		if field.has_powerup(x, y) and field.brick_at(x, y) != Types_.Brick.BRICK:
+			field.add_flame(x, y, arm | Types_.Flame.END, b.chain_owner,
+				_flame_ticks)
+			field.powerup[Field_.idx(x, y)] = Field_.NO_POWERUP
+			return
+
+		if field.brick_at(x, y) == Types_.Brick.SOLID:
+			return
+
+		# THE END BIT IS A FLAG ON THE ARM, NOT A REPLACEMENT FOR IT. It used
+		# to be written instead of the direction, so the last cell of every arm
+		# carried END and nothing else — and the view, which picks its sprite
+		# from the direction bits, had no direction to pick from and fell
+		# through to the CENTRE sprite. Every arm therefore ended in a second
+		# epicentre instead of MFLAME.ANI's own `flame tip<dir> green`, which
+		# was never drawn at all. The tip art is four of its nine sequences.
+		#
+		# An arm also ENDS on a brick it destroys, which is the other way it
+		# stops and had the same defect from the other side: that cell drew the
+		# mid piece and ran off the edge of the rubble.
+		var stops: bool = n == b.flame_len \
+			or field.brick_at(x, y) == Types_.Brick.BRICK
+		field.add_flame(x, y, arm | (Types_.Flame.END if stops else 0),
+			b.chain_owner, _flame_ticks)
+
+		if field.brick_at(x, y) == Types_.Brick.BRICK:
+			# destroy_brick() leaves `powerup[i]` untouched — the whole point
+			# of hiding it there — so any powerup this brick was hiding is now
+			# sitting exposed on the blank cell, exactly as if it had always
+			# been in the open. Nothing further to do here.
+			field.destroy_brick(x, y, _brick_ticks)
+			if stats != null:
+				stats.bump(Stats_.C.BRICKS_DESTROYED)
+			return
+
+
+static func _arm_flag(dir: int) -> int:
+	match dir:
+		Types_.Dir.UP: return Types_.Flame.UP
+		Types_.Dir.DOWN: return Types_.Flame.DOWN
+		Types_.Dir.LEFT: return Types_.Flame.LEFT
+		Types_.Dir.RIGHT: return Types_.Flame.RIGHT
+	return Types_.Flame.CROSS
+
+
+## A player dies when the cell their centre is in is burning. Cell-based rather
+## than box-based on purpose: the notes say "flames go thru bombermans", so the
+## flame is not a solid the box collides with — the question is only which cell
+## the player is standing on.
+func _check_flame_death(p: Player_) -> void:
+	# In the air off a trampoline, or briefly immortal after a teleport. The
+	# notes: a teleporting player "is immortal when he is transported".
+	if p.fly_ticks > 0 or p.invulnerable > 0:
+		return
+	if not field.has_flame(p.tile_x(), p.tile_y()):
+		return
+	kill(p, field.flame_owner_at(p.tile_x(), p.tile_y()))
+
+
+## Age everyone who is dying, and take away those whose animation is over.
+##
+## Before this a killed player was `dying` and `alive` FOREVER: nothing in the
+## simulation ever cleared `alive`, so a corpse kept its place in every loop
+## that tested it, kept a shadow under it, and kept being drawn. The renderer
+## stopped after the animation's own frames, which hid most of it — but the
+## body was still there.
+func _tick_the_dying() -> void:
+	for p in players:
+		if not p.alive or not p.dying:
+			continue
+		if tick_count - p.death_tick >= DEATH_TICKS:
+			p.alive = false
+
+
+func kill(p: Player_, by: int = -1) -> void:
+	if p.dying or not p.alive:
+		return
+	p.dying = true
+	p.death_tick = tick_count
+	# One of the disc's 24 deaths, from the seeded RNG so a replay dies the
+	# same way. VALUELST 105 is where the 24 comes from.
+	p.death_anim = rng.randi_range(1, DEATH_ANIMS)
+	if stats != null:
+		stats.bump(Stats_.C.DEATHS_ALL)
+		if is_bot(p.slot):
+			stats.bump(Stats_.C.DEATHS_AI)
+	# The kill goes to whoever owned the flame. p.killed_by is set two lines
+	# below in the original order of this function, so the attribution is read
+	# from `by` here rather than from the player.
+	var killer := -1 if by == Field_.NO_OWNER else by
+	if killer >= 0 and killer < round_kills.size():
+		# Your own bomb costs you one. OPTIONS.BM says so in as many words.
+		round_kills[killer] += -1 if killer == p.slot else 1
+	p.killed_by = -1 if by == Field_.NO_OWNER else by
+	p.move = Types_.MoveState.STILL
+	p.action = Types_.Action.NONE
+	# Their pickups go back on the field — fpc_atomic does the same at its
+	# 0.07004, "Respawn collected powerups of dead player".
+	repopulate_powerups(p)
+	_play(p.slot, Types_.SoundEffect.PLAYER_DIED)
+	# "after a player death" — 282 taunts, the largest range on the disc. Raised
+	# as its own event so the mixer can drop it under load without losing the
+	# scream, which is the one that tells you what happened.
+	_play(p.killed_by, Types_.SoundEffect.DEATH_TAUNT)
+
+
+# ---------------------------------------------------------------------------
+# Map specials — conveyors, arrows, warps, trampolines, regrowth
+# ---------------------------------------------------------------------------
+#
+# Coordinates are the original's, from EXTRA*.RES. The RULES below are
+# reconstructed, in the same sense as movement — docs/BUGS.md Q5.
+#
+# THE CONVEYOR SPEED. Resources 190-192 give three, 250 / 350 / 450 hundredths
+# of a pixel per frame, and resource 189 says there are three. Which one a
+# round uses is a game setting the original exposes in its options; there is no
+# resource naming a default, so the middle one is used and the choice is
+# settable rather than baked in.
+var conveyor_speed_index: int = 1
+
+## Settings the original exposes on its own options screen, each defaulting to
+## the VALUELST resource that is its documented default. MESSAGES.TXT 250-268
+## is that screen, label by label, and OPTIONS.BM is its help text; between
+## them they say which resources are settings rather than constants.
+##
+## They live here rather than being read from Values_ at the point of use so
+## that a menu can change them — which is exactly what resource 310's comment
+## ("default; override by settings configuration") describes.
+var enclose_depth: int = -1        ## resource 27, four depths named by 315-318
+var stomped_detonate: bool = true  ## resource 46
+var diseases_destroyable: bool = true  ## resource 120
+
+
+## Fill in any setting still at its sentinel from the tuning table. Called by
+## setup(), so a caller that sets nothing gets the disc's defaults and a caller
+## that sets something keeps it.
+func _apply_defaults() -> void:
+	if enclose_depth < 0:
+		enclose_depth = int(Values_.V[Const_.Res.ENCLOSE_DEPTH])
+	stomped_detonate = stomped_detonate \
+		and Values_.V[Const_.Res.WALL_DETONATES_BOMB] != 0
+	diseases_destroyable = diseases_destroyable \
+		and Values_.V[Const_.Res.DISEASE_DESTROYABLE] != 0
+
+
+func conveyor_speed() -> int:
+	var n: int = Values_.V[Const_.Res.CONVEYOR_SPEED_COUNT]
+	var i: int = clampi(conveyor_speed_index, 0, n - 1)
+	return Values_.V[Const_.Res.CONVEYOR_SPEED_BASE + i]
+
+
+## A player who is flying off a trampoline is out of play: not on a cell, not
+## hit by flame, not carried by anything.
+func _field_vs_player(p: Player_) -> void:
+	if p.fly_ticks > 0:
+		p.fly_ticks -= 1
+		if p.fly_ticks == 0:
+			# Landed. The destination was chosen when they were launched.
+			p.place_at_tile_centre(p.fly_to_x, p.fly_to_y)
+			_play(p.slot, Types_.SoundEffect.TRAMPOLINE)
+		return
+
+	var tx := p.tile_x()
+	var ty := p.tile_y()
+
+	# A trampoline launches whoever steps on it. Resource 680 is 30 frames in
+	# the air, resource 681 the 35 pixels per frame it rises — the renderer's
+	# business; the simulation only needs to know they are away and where they
+	# come down.
+	if field.tramp_at(tx, ty):
+		var dest := _random_open_cell(tx, ty)
+		if dest.x >= 0:
+			p.fly_ticks = Values_.V[Const_.Res.TRAMP_BOUNCE_FRAMES]
+			p.fly_to_x = dest.x
+			p.fly_to_y = dest.y
+			return
+
+	# A warp gate takes whoever steps on it to the gate it leads to. The notes:
+	# a teleporting player is briefly immortal, flames pass over a gate, and
+	# bombs are stopped by one.
+	var gate := field.warp_at(tx, ty)
+	if gate >= 0 and p.warp_cooldown == 0:
+		var exit_cell := field.warp_exit(gate)
+		if exit_cell.x >= 0:
+			p.place_at_tile_centre(exit_cell.x, exit_cell.y)
+			# Without a cooldown the player would immediately be standing on
+			# the destination gate and be sent straight back, forever.
+			p.warp_cooldown = Values_.V[Const_.Res.TRAMP_BOUNCE_FRAMES] / 2
+			p.invulnerable = p.warp_cooldown
+			_play(p.slot, Types_.SoundEffect.WARP)
+			return
+
+	# A conveyor carries whoever is on it, in its direction, at the round's
+	# conveyor speed. It moves the player even when they are standing still,
+	# which is the whole point of it.
+	var carry := field.conveyor_at(tx, ty)
+	if carry != Types_.Dir.NONE:
+		var step: Vector2i = Types_.DIR_VEC[carry]
+		var speed := conveyor_speed()
+		if step.x != 0:
+			p.x = _slide_x_by(p, step.x * speed)
+		else:
+			p.y = _slide_y_by(p, step.y * speed)
+
+
+## Move a player along an axis by an explicit amount, reusing the same
+## collision the player's own movement uses — so a conveyor cannot push
+## somebody into a wall.
+func _slide_x_by(p: Player_, delta: int) -> int:
+	var saved := p.speed
+	p.speed = absi(delta)
+	var result := _slide_x(p, delta)
+	p.speed = saved
+	return result
+
+
+func _slide_y_by(p: Player_, delta: int) -> int:
+	var saved := p.speed
+	p.speed = absi(delta)
+	var result := _slide_y(p, delta)
+	p.speed = saved
+	return result
+
+
+## A cell to land on after a trampoline. Anywhere open that is not another
+## trampoline, or the player could bounce forever.
+func _random_open_cell(from_x: int, from_y: int) -> Vector2i:
+	var options: Array[Vector2i] = []
+	for y in Const_.FIELD_H:
+		for x in Const_.FIELD_W:
+			if x == from_x and y == from_y:
+				continue
+			if not field.is_open(x, y) or field.tramp_at(x, y):
+				continue
+			if bomb_at(x, y) != null:
+				continue
+			options.append(Vector2i(x, y))
+	if options.is_empty():
+		return Vector2i(-1, -1)
+	return options[rng.randi_range(0, options.size() - 1)]
+
+
+## Per-tick field business: cooldowns and the haunted house's regrowth.
+func _tick_field() -> void:
+	for p in players:
+		if p.warp_cooldown > 0:
+			p.warp_cooldown -= 1
+		if p.invulnerable > 0:
+			p.invulnerable -= 1
+
+	var cells: Array[Vector2i] = []
+	for p in players:
+		if p.alive and not p.dying:
+			cells.append(Vector2i(p.tile_x(), p.tile_y()))
+	field.tick_regen(cells, rng)
+
+
+# ---------------------------------------------------------------------------
+# The round
+# ---------------------------------------------------------------------------
+#
+# HURRY. Resource 101 says the message first flashes at 60 seconds remaining,
+# and its comment is unusually firm about it:
+#
+#     it is NOT RECOMMENDED that you modify this value! A lot of strange
+#     things will happen if you set it to "non standard" values.
+#
+# From then on the playfield closes in. Resource 27 is the default enclosement
+# DEPTH and it is 1, which resource 28's list of four depths (0..3) makes "2
+# rows" — NOT the whole field. fpc_atomic always runs its full 160-cell spiral,
+# which is depth 3. ORACLE row 19.
+func _tick_round() -> void:
+	_tick_the_dying()
+	if outcome != Outcome.RUNNING:
+		ticks_since_over += 1
+		return
+
+	if time_left > 0:
+		time_left -= 1
+
+	var hurry_at: int = Values_.V[Const_.Res.HURRY_AT_SECONDS] * Const_.TICK_HZ
+	if hurry_index < 0 and time_left <= hurry_at:
+		hurry_index = 0
+		_play(-1, Types_.SoundEffect.HURRY)
+	elif hurry_index >= 0:
+		_advance_hurry()
+
+	_check_round_over()
+	if outcome != Outcome.RUNNING:
+		# The transition tick, and only it: this function returns at the top
+		# once the round is over, so it cannot be reached twice in one round.
+		_play(winner_slot, Types_.SoundEffect.ROUND_WIN
+			if outcome == Outcome.LAST_STANDING else Types_.SoundEffect.DRAW)
+
+
+## One step of the closing wall. Its path is a clockwise inward spiral, which
+## fpc_atomic tabulates as 160 points; it is generated here instead, because a
+## generated spiral cannot be mis-transcribed and the shape is not in any data
+## file either way.
+##
+## The wall drops a SOLID on the cell, and per resource 46 a bomb caught by it
+## is DETONATED rather than destroyed.
+func _advance_hurry() -> void:
+	var path := hurry_path()
+	if hurry_index >= path.size():
+		return
+	# One cell per 8 ticks, so the field closes over a plausible span rather
+	# than instantly. Not a tabulated figure — a guess, and the only one in
+	# this function.
+	if tick_count % 8 != 0:
+		return
+	var cell: Vector2i = path[hurry_index]
+	hurry_index += 1
+
+	var b := bomb_at(cell.x, cell.y)
+	if b != null and stomped_detonate:
+		b.detonated = true
+		_pending.append(bombs.find(b))
+		var cursor := 0
+		while cursor < _pending.size():
+			_explode(bombs[_pending[cursor]])
+			cursor += 1
+
+	field.brick[Field_.idx(cell.x, cell.y)] = Types_.Brick.SOLID
+	field.powerup[Field_.idx(cell.x, cell.y)] = Field_.NO_POWERUP
+	# "a solid tile slamming in place (after 'hurry' is displayed)" — and the
+	# original's own note that the code is HARD-CODED to pick one of three.
+	_play(-1, Types_.SoundEffect.SOLID_DROP)
+
+	# Anyone standing there is crushed.
+	for p in players:
+		if p.alive and not p.dying \
+				and p.tile_x() == cell.x and p.tile_y() == cell.y:
+			kill(p, -1)
+
+
+## The cells the closing wall fills, in order, for the configured depth.
+##
+## Depth comes from resource 27 and resource 28 says there are four of them.
+## Reading 0 as none, 1 as two rows, 2 as four rows and 3 as the whole field is
+## the only reading consistent with both resources; the mapping itself is not
+## stated. docs/BUGS.md.
+func hurry_path() -> Array[Vector2i]:
+	if _hurry_path_cache.is_empty():
+		_hurry_path_cache = _build_hurry_path(enclose_depth)
+	return _hurry_path_cache
+
+
+func _build_hurry_path(depth: int) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	if depth <= 0:
+		return out
+	# Rings of the spiral: depth 1 fills two rows, i.e. one ring; depth 2 two
+	# rings; depth 3 every ring there is.
+	var rings: int = 1 if depth == 1 else (2 if depth == 2 else 99)
+	var left := 0
+	var top := 0
+	var right := Const_.FIELD_W - 1
+	var bottom := Const_.FIELD_H - 1
+	var ring := 0
+	while left <= right and top <= bottom and ring < rings:
+		for x in range(left, right + 1):
+			out.append(Vector2i(x, top))
+		for y in range(top + 1, bottom + 1):
+			out.append(Vector2i(right, y))
+		if bottom > top:
+			for x in range(right - 1, left - 1, -1):
+				out.append(Vector2i(x, bottom))
+		if right > left:
+			for y in range(bottom - 1, top, -1):
+				out.append(Vector2i(left, y))
+		left += 1
+		top += 1
+		right -= 1
+		bottom -= 1
+		ring += 1
+	return out
+
+
+var _hurry_path_cache: Array[Vector2i] = []
+
+
+## Is the round over, and why?
+##
+## Three ways to end. A DRAW is the case where the last players die close
+## enough together that nobody outlived anyone — AtomBomberman's notes call it
+## "draw game condition (draw time) - if last bomber dies in some time after
+## the one before".
+func _check_round_over() -> void:
+	if outcome != Outcome.RUNNING:
+		return
+
+	if time_left <= 0:
+		outcome = Outcome.TIME_UP
+		return
+
+	var standing: Array[Player_] = []
+	var contenders := 0
+	for p in players:
+		if not p.in_play:
+			continue
+		contenders += 1
+		if p.alive and not p.dying:
+			standing.append(p)
+
+	if team_play:
+		if contenders < 2:
+			return
+		var teams := {}
+		for p in standing:
+			teams[p.team] = true
+		if teams.size() == 1:
+			outcome = Outcome.LAST_STANDING
+			winner_team = standing[0].team
+		elif teams.is_empty():
+			outcome = Outcome.DRAW
+		return
+
+	# Both endings need the round to have STARTED with more than one player IN
+	# PLAY. Counting seats rather than players made a server with ten empty
+	# seats declare an instant draw, and counting all players made a solo round
+	# end on tick one with its only player as the winner.
+	if contenders < 2:
+		return
+	if standing.size() == 1:
+		outcome = Outcome.LAST_STANDING
+		winner_slot = standing[0].slot
+		winner_team = standing[0].team
+	elif standing.is_empty():
+		outcome = Outcome.DRAW
+
+
+## End the round with nobody winning it. MANUAL.BM: "F10 - Forces a draw game."
+##
+## The same outcome running out of clock produces, so the match counts it the
+## same way and no new case appears anywhere downstream.
+func force_draw() -> bool:
+	if outcome != Outcome.RUNNING:
+		return false
+	outcome = Outcome.DRAW
+	winner_slot = -1
+	winner_team = Types_.TEAM_UNSET
+	_play(-1, Types_.SoundEffect.DRAW)
+	return true
+
+
+func round_over() -> bool:
+	return outcome != Outcome.RUNNING
+
+
+func seconds_left() -> int:
+	return time_left / Const_.TICK_HZ
+
+
+# ---------------------------------------------------------------------------
+# Bombs in motion — kick, punch, throw, jelly
+# ---------------------------------------------------------------------------
+#
+# ASSUMED, in the same sense as movement — docs/BUGS.md Q5. Every SPEED and
+# HEIGHT is the original's (resources 300, 301, 660, 661, 500-506, 665, 667);
+# what is reconstructed is how they are applied. A bomb rolls until something
+# blocks it, and a punched or thrown bomb flies over everything and lands.
+func _move_bombs() -> void:
+	for b in bombs:
+		if b.detonated:
+			continue
+		if b.carried_by >= 0:
+			_carry_bomb(b)
+		elif b.flying:
+			_fly_bomb(b)
+		elif b.move_dir != Types_.Dir.NONE:
+			_roll_bomb(b)
+
+
+## A carried bomb sits on its carrier and its fuze does not burn — the notes:
+## "when its picked up its not even ticking".
+func _carry_bomb(b: Bomb_) -> void:
+	var p := player_by_slot(b.carried_by)
+	if p == null or not p.alive or p.dying:
+		# The carrier died holding it. It falls where they stood and resumes.
+		b.carried_by = -1
+		return
+	b.x = p.x
+	b.y = p.y
+
+
+## One step of a rolling bomb. It stops on anything solid; a jelly bomb bounces
+## back instead, and may change direction crazily at a cell centre — resource
+## 667 makes that a 1-in-3 chance.
+func _roll_bomb(b: Bomb_) -> void:
+	var step: Vector2i = Types_.DIR_VEC[b.move_dir]
+	var next_x: int = b.x + step.x * b.speed
+	var next_y: int = b.y + step.y * b.speed
+
+	# The cell the bomb's leading edge is entering.
+	var lead_x: int = (next_x + step.x * (Bomb_.TILE_W_CP / 2 - 1)) / Bomb_.TILE_W_CP \
+		if step.x != 0 else next_x / Bomb_.TILE_W_CP
+	var lead_y: int = (next_y + step.y * (Bomb_.TILE_H_CP / 2 - 1)) / Bomb_.TILE_H_CP \
+		if step.y != 0 else next_y / Bomb_.TILE_H_CP
+
+	if _bomb_blocked(b, lead_x, lead_y):
+		if b.jelly_bounce:
+			b.move_dir = _opposite(b.move_dir)
+			b.state = Types_.BombState.WOBBLE
+			_play(b.owner, Types_.SoundEffect.BOMB_BOUNCE)
+		else:
+			b.move_dir = Types_.Dir.NONE
+			b.speed = 0
+			# Snap to the cell it came to rest on, so a stopped bomb is always
+			# cell-aligned and bomb_at() can find it.
+			b.place_at_tile_centre(b.tile_x(), b.tile_y())
+			_play(b.owner, Types_.SoundEffect.BOMB_STOP)
+		return
+
+	b.x = next_x
+	b.y = next_y
+
+	# An ARROW redirects a bomb that rolls onto it. A bomb PLACED on one is not
+	# moved — AtomBomberman's notes: "when bomb is put on an arrow, or its
+	# thrown onto it, it doesnt move because of the arrow" — which is why this
+	# is here, in the rolling path, and not in place_bomb().
+	if _at_cell_centre(b):
+		var push := field.arrow_at(b.tile_x(), b.tile_y())
+		if push != Types_.Dir.NONE and push != b.move_dir:
+			b.move_dir = push
+			return
+		# A CONVEYOR under a rolling bomb turns it too, at the belt's speed.
+		var carry := field.conveyor_at(b.tile_x(), b.tile_y())
+		if carry != Types_.Dir.NONE:
+			b.move_dir = carry
+			b.speed = conveyor_speed()
+
+	# A jelly bomb crossing a cell centre may turn. "at each 0,0 intersection,
+	# what is the chances that a punched jelly bomb will change directions
+	# crazily" — resource 667.
+	if b.jelly_bounce and _at_cell_centre(b):
+		if rng.randi_range(1, Values_.V[Const_.Res.JELLY_TURN_CHANCE]) == 1:
+			var options: Array[int] = []
+			for d in [Types_.Dir.UP, Types_.Dir.DOWN, Types_.Dir.LEFT,
+					Types_.Dir.RIGHT]:
+				var v: Vector2i = Types_.DIR_VEC[d]
+				if not _bomb_blocked(b, b.tile_x() + v.x, b.tile_y() + v.y):
+					options.append(d)
+			if not options.is_empty():
+				b.move_dir = options[rng.randi_range(0, options.size() - 1)]
+
+
+func _at_cell_centre(b: Bomb_) -> bool:
+	var ox: int = b.x % Bomb_.TILE_W_CP
+	var oy: int = b.y % Bomb_.TILE_H_CP
+	return absi(ox - Bomb_.TILE_W_CP / 2) <= b.speed / 2 \
+		and absi(oy - Bomb_.TILE_H_CP / 2) <= b.speed / 2
+
+
+## Is a cell blocked for a PLAYER? The field, plus any bomb at rest on it — a
+## player cannot walk through a bomb, which is what makes kicking meaningful.
+func _player_blocked(tx: int, ty: int) -> bool:
+	if not field.is_open(tx, ty):
+		return true
+	return bomb_at(tx, ty) != null
+
+
+## Can a rolling bomb enter this cell? Blocked by the field, by another bomb,
+## and by a player — a bomb cannot roll through someone.
+func _bomb_blocked(b: Bomb_, tx: int, ty: int) -> bool:
+	if not field.is_open(tx, ty):
+		return true
+	# A warp gate stops a bomb — the notes: teleports "stop bombs".
+	if field.warp_at(tx, ty) >= 0:
+		return true
+	# So does a trampoline. fpc_atomic 0.11002 disables kicking and throwing
+	# onto one for the same reason.
+	if field.tramp_at(tx, ty):
+		return true
+	var other := bomb_at(tx, ty)
+	if other != null and other != b:
+		return true
+	for p in players:
+		if not p.alive or p.dying:
+			continue
+		if p.tile_x() == tx and p.tile_y() == ty:
+			return true
+	return false
+
+
+## One tick of a flying bomb. It travels in a straight line between two cell
+## centres over fly_ticks and lands on arrival; the arc is the renderer's
+## business and lives in fly_height.
+func _fly_bomb(b: Bomb_) -> void:
+	b.fly_tick += 1
+	var f: float = float(b.fly_tick) / float(maxi(1, b.fly_ticks))
+	b.x = b.fly_from_x + int((b.fly_to_x - b.fly_from_x) * f)
+	b.y = b.fly_from_y + int((b.fly_to_y - b.fly_from_y) * f)
+	if b.fly_tick < b.fly_ticks:
+		return
+
+	# Landed. SOUNDLST 160 is "a punched/grabbed bomb bouncing along", which is
+	# this moment and not the throw: the throw is BOMB_PUNCH or BOMB_GRAB.
+	b.flying = false
+	b.x = b.fly_to_x
+	b.y = b.fly_to_y
+	b.place_at_tile_centre(b.tile_x(), b.tile_y())
+	_play(b.owner, Types_.SoundEffect.BOMB_THROWN)
+	_bomb_on_the_head(b)
+
+	if b.bounces_left > 0:
+		# A punched bomb bounces on, one cell at a time, until it runs out of
+		# bounces or something stops it. Resource 661 is the smaller arc.
+		b.bounces_left -= 1
+		var step: Vector2i = Types_.DIR_VEC[b.move_dir]
+		var tx := b.tile_x() + step.x
+		var ty := b.tile_y() + step.y
+		if not _bomb_blocked(b, tx, ty):
+			_launch(b, tx, ty, Values_.V[Const_.Res.PUNCH_ARC_SMALL],
+				Values_.V[Const_.Res.PUNCHED_BOMB_SPEED])
+			return
+	b.move_dir = Types_.Dir.NONE
+	b.speed = 0
+
+
+## A BOMB LANDING ON SOMEBODY'S HEAD, which the disc tunes and the port had not
+## implemented at all.
+##
+## Two resources say what happens, and their comments are the whole rule:
+##
+##     670,1   what's the minimum number of powers you lose when hit on the head?
+##     671,3   what's the additional random number of powers you might lose?
+##
+## and SOUNDLST 360-399 gives it forty recordings of its own, described as "you
+## are stunned by a bomb landing on you". Forty takes is not a sound for
+## something that never happens.
+##
+## The powers go back on the field the same way a dead player's do — the field
+## is where a lost powerup belongs, and scatter_powerup is already the disc's
+## own answer to "where". WHICH powers are lost is this port's: the disc says a
+## number, not a choice, so they are taken in the order the powerup table is
+## in, from whatever the player actually holds.
+func _bomb_on_the_head(b: Bomb_) -> void:
+	var lose: int = int(Values_.V[Const_.Res.HEAD_HIT_MIN_LOSS]) \
+		+ rng.randi_range(0, int(Values_.V[Const_.Res.HEAD_HIT_RAND_LOSS]))
+	if lose <= 0:
+		return
+	for p in players:
+		if not p.in_play or not p.alive or p.dying:
+			continue
+		if p.tile_x() != b.tile_x() or p.tile_y() != b.tile_y():
+			continue
+		if p.slot == b.owner and b.carried_by == p.slot:
+			# You do not brain yourself with the bomb you are holding.
+			continue
+		var lost := 0
+		for which in Const_.POWERUP_COUNT:
+			if lost >= lose:
+				break
+			# The diseases are not powers you can lose: VALUELST 122 already
+			# says a disease does not recycle when it leaves a player, and
+			# taking one away would be a reward.
+			if which == Types_.PowerUp.DISEASE \
+					or which == Types_.PowerUp.SUPER_BAD_DISEASE:
+				continue
+			while p.collected[which] > 0 and lost < lose:
+				p.collected[which] -= 1
+				field.scatter_powerup(which, rng)
+				lost += 1
+		if lost > 0:
+			recompute_powers(p)
+			_play(p.slot, Types_.SoundEffect.BOMB_HIT_HEAD)
+
+
+## Send a bomb flying to a cell. The flight time comes from the distance and
+## the speed, so a bomb crosses ground at the tabulated rate rather than at a
+## made-up number of ticks.
+func _launch(b: Bomb_, tx: int, ty: int, height: int, speed: int) -> void:
+	b.fly_from_x = b.x
+	b.fly_from_y = b.y
+	b.fly_to_x = tx * Bomb_.TILE_W_CP + Bomb_.TILE_W_CP / 2
+	b.fly_to_y = ty * Bomb_.TILE_H_CP + Bomb_.TILE_H_CP / 2
+	var dist: int = absi(b.fly_to_x - b.fly_from_x) + absi(b.fly_to_y - b.fly_from_y)
+	b.fly_ticks = maxi(1, dist / maxi(1, speed))
+	b.fly_tick = 0
+	b.fly_height = height
+	b.flying = true
+	b.speed = speed
+	# A punched bomb's timer is reset — the notes: "bomb timer is reset when
+	# its punched".
+	b.fuze = _fuze_ticks
+
+
+## The other way round. Also what a chained bomb is told not to fire down: the
+## original computes (d + 2) & 3 over its own direction table, at 0x4240FA.
+static func _opposite(dir: int) -> int:
+	match dir:
+		Types_.Dir.UP: return Types_.Dir.DOWN
+		Types_.Dir.DOWN: return Types_.Dir.UP
+		Types_.Dir.LEFT: return Types_.Dir.RIGHT
+		Types_.Dir.RIGHT: return Types_.Dir.LEFT
+	return Types_.Dir.NONE
+
+
+## Kick the bomb a player has walked into. Automatic when they have the kicker;
+## returns false if there was nothing to kick.
+func kick_bomb(p: Player_) -> bool:
+	if not p.can_kick:
+		return false
+	var step: Vector2i = Types_.DIR_VEC[p.facing]
+	var b := bomb_at(p.tile_x() + step.x, p.tile_y() + step.y)
+	if b == null:
+		return false
+	b.move_dir = p.facing
+	b.speed = Values_.V[Const_.Res.KICKED_BOMB_SPEED]
+	b.jelly_bounce = p.jelly_bombs
+	b.kicked_by = p.slot
+	# Long enough to see: KICK.ANI's own sequences are four frames.
+	p.kick_ticks = KICK_ANIM_TICKS
+	_play(p.slot, Types_.SoundEffect.BOMB_KICK)
+	return true
+
+
+## Stop a bomb this player kicked, where it stands.
+##
+## MANUAL.BM, on the action button: "if your bomberman has the Kick powerup,
+## press the action button to stop a kicked bomb." Nothing did that before, and
+## SoundEffect.BOMB_STOP sat unused as the evidence.
+func stop_bomb(p: Player_) -> bool:
+	if not p.can_kick:
+		return false
+	for b in bombs:
+		if b.detonated or b.flying or b.carried_by >= 0:
+			continue
+		if b.kicked_by != p.slot or b.move_dir == Types_.Dir.NONE:
+			continue
+		b.move_dir = Types_.Dir.NONE
+		b.speed = 0
+		b.kicked_by = -1
+		# Left where it stopped rather than snapped to the cell centre: the
+		# original's bombs sit where they stop, which is what makes a stopped
+		# bomb a hazard in a corridor.
+		_play(p.slot, Types_.SoundEffect.BOMB_STOP)
+		return true
+	return false
+
+
+## Punch the bomb in front of the player: three cells through the air, then
+## one-cell bounces. Resources 660 and 661 are the two arc heights.
+func punch_bomb(p: Player_) -> bool:
+	if not p.can_punch:
+		return false
+	var step: Vector2i = Types_.DIR_VEC[p.facing]
+	var b := bomb_at(p.tile_x() + step.x, p.tile_y() + step.y)
+	if b == null:
+		return false
+	var tx := b.tile_x() + step.x * 3
+	var ty := b.tile_y() + step.y * 3
+	# Clamp into the field rather than punching a bomb off the map.
+	tx = clampi(tx, 0, Const_.FIELD_W - 1)
+	ty = clampi(ty, 0, Const_.FIELD_H - 1)
+	b.move_dir = p.facing
+	b.jelly_bounce = p.jelly_bombs
+	b.bounces_left = 3
+	_launch(b, tx, ty, Values_.V[Const_.Res.PUNCH_ARC_BIG],
+		Values_.V[Const_.Res.PUNCHED_BOMB_SPEED])
+	p.punch_ticks = PUNCH_ANIM_TICKS
+	_play(p.slot, Types_.SoundEffect.BOMB_PUNCH)
+	return true
+
+
+## Pick up the bomb under or in front of the player. Its fuze stops while
+## carried, and resource 665 says the player pauses 2 frames doing it.
+func grab_bomb(p: Player_) -> bool:
+	if not p.can_grab:
+		return false
+	for b in bombs:
+		if b.detonated or b.flying or b.carried_by >= 0:
+			continue
+		if b.owner != p.slot:
+			continue
+		var step: Vector2i = Types_.DIR_VEC[p.facing]
+		var on_me: bool = b.tile_x() == p.tile_x() and b.tile_y() == p.tile_y()
+		var in_front: bool = b.tile_x() == p.tile_x() + step.x \
+			and b.tile_y() == p.tile_y() + step.y
+		if not (on_me or in_front):
+			continue
+		b.carried_by = p.slot
+		b.move_dir = Types_.Dir.NONE
+		p.pickup_pause = Values_.V[Const_.Res.PICKUP_PAUSE_FRAMES]
+		_play(p.slot, Types_.SoundEffect.BOMB_GRAB)
+		return true
+	return false
+
+
+## Throw the carried bomb. It travels along the four-point curve at resources
+## 500..506 — (12,10) (25,20) (25,30) (12,40) — whose last point is 40, which
+## is the width of a cell, so the throw reaches three cells ahead.
+func throw_bomb(p: Player_) -> bool:
+	for b in bombs:
+		if b.carried_by != p.slot:
+			continue
+		var step: Vector2i = Types_.DIR_VEC[p.facing]
+		var tx := clampi(p.tile_x() + step.x * 3, 0, Const_.FIELD_W - 1)
+		var ty := clampi(p.tile_y() + step.y * 3, 0, Const_.FIELD_H - 1)
+		b.carried_by = -1
+		b.move_dir = p.facing
+		b.jelly_bounce = p.jelly_bombs
+		b.bounces_left = 0
+		# The GRAB left p.pickup_pause counting down so BPICKUP.ANI could play
+		# out. A throw ends that pose — it is the deliberate next action, not
+		# an interruption of the pickup — and without this the view's own
+		# check for pickup_pause (game_view.gd) outranks the "carrying" check,
+		# so a fast grab-then-throw kept drawing the player picking up a bomb
+		# that had already left their hands.
+		p.pickup_pause = 0
+		_launch(b, tx, ty, Values_.V[Const_.Res.PUNCH_ARC_BIG],
+			Values_.V[Const_.Res.PUNCHED_BOMB_SPEED])
+		_play(p.slot, Types_.SoundEffect.BOMB_THROWN)
+		return true
+	return false
+
+
+## Spooge: place every available bomb in a line ahead of the player, until
+## something blocks it. Disabled by having the grab, and vice versa.
+func spooge(p: Player_) -> int:
+	if not p.can_spooge:
+		return 0
+	var step: Vector2i = Types_.DIR_VEC[p.facing]
+	var placed := 0
+	var n := 1
+	while p.bombs_available > 0 and n < Const_.FIELD_W:
+		var tx := p.tile_x() + step.x * n
+		var ty := p.tile_y() + step.y * n
+		if not field.is_open(tx, ty) or bomb_at(tx, ty) != null:
+			break
+		var b: Bomb_ = Bomb_.new()
+		b.place_at_tile_centre(tx, ty)
+		b.owner = p.slot
+		b.chain_owner = p.slot
+		b.fuze = _fuze_ticks
+		b.placed_tick = tick_count
+		b.flame_len = p.flame_len
+		bombs.append(b)
+		p.bombs_available -= 1
+		placed += 1
+		n += 1
+	if placed > 0:
+		# One sound for the line, not one per bomb: SOUNDLST's range is
+		# "after laying out a HUGE string of bombs", which is the act and not
+		# each bomb in it. The individual BOMB_DROPs are deliberately not
+		# raised here for the same reason.
+		_play(p.slot, Types_.SoundEffect.SPOOGE)
+	return placed
+
+
+## Detonate every triggerable bomb this player owns. A flying bomb is not
+## triggerable — fpc_atomic reached the same rule at its 0.07005.
+func trigger_bombs(p: Player_) -> int:
+	var fired := 0
+	for i in bombs.size():
+		var b: Bomb_ = bombs[i]
+		if b.detonated or not b.triggered or b.flying:
+			continue
+		if b.owner != p.slot:
+			continue
+		b.detonated = true
+		_pending.append(i)
+		fired += 1
+	if fired > 0:
+		# Resolve the chain now, so a trigger goes off on the tick it is
+		# pressed rather than a tick later.
+		var cursor := 0
+		while cursor < _pending.size():
+			var b: Bomb_ = bombs[_pending[cursor]]
+			cursor += 1
+			_explode(b)
+	return fired
+
+
+# ---------------------------------------------------------------------------
+# Powerups
+# ---------------------------------------------------------------------------
+func _collect_powerup(p: Player_) -> void:
+	var what := field.take_powerup(p.tile_x(), p.tile_y())
+	if what == Field_.NO_POWERUP:
+		return
+	give_powerup(p, what)
+	p.pickups += 1
+
+	# A disease is a powerup you did not want, and SOUNDLST gives the two
+	# separate ranges — 400 "you get a powerup (a good one)" against 550's
+	# "ploppy poop sounds". RANDOM resolves to something else inside
+	# give_powerup(), so it is judged by what it turned into, not by its own
+	# slot: catch_disease() is what raises the disease's own sound.
+	var bad := what == Types_.PowerUp.DISEASE \
+		or what == Types_.PowerUp.SUPER_BAD_DISEASE
+	_play(p.slot, Types_.SoundEffect.GET_BAD_POWERUP if bad
+		else Types_.SoundEffect.GET_GOOD_POWERUP)
+
+	# "you are now AWESOME (7th powerup and 3rd thereafter)" — SOUNDLST's own
+	# description of range 1400..1699. The 7th, then the 10th, 13th and so on.
+	if p.pickups >= AWESOME_AT and (p.pickups - AWESOME_AT) % AWESOME_EVERY == 0:
+		_play(p.slot, Types_.SoundEffect.AWESOME)
+
+
+## The cap on a powerup, from VALUELST 550..564. Zero there means no limit.
+func cap_of(which: int) -> int:
+	return Values_.V[Const_.Res.CAP_BASE + which]
+
+
+func at_cap(p: Player_, which: int) -> bool:
+	var cap := cap_of(which)
+	return cap > 0 and p.collected[which] >= cap
+
+
+## Apply one powerup to a player.
+##
+## Returns false when it had no effect, which for the caps means the powerup is
+## consumed and wasted — the original has nowhere to put it back.
+func give_powerup(p: Player_, which: int) -> bool:
+	# A fresh powerup can cure a disease: VALUELST 124 enables it and 125 makes
+	# it a 1-in-10 chance. Rolled before the powerup is applied, so a cure and
+	# a new disease in the same pickup cannot cancel each other out.
+	if Values_.V[Const_.Res.DISEASE_CURABLE] != 0 and p.any_disease():
+		if rng.randi_range(1, Values_.V[Const_.Res.DISEASE_CURE_CHANCE]) == 1:
+			cure_all(p)
+
+	match which:
+		Types_.PowerUp.RANDOM:
+			# Becomes some other powerup. Never itself, or a run of randoms
+			# could loop.
+			var pool: Array[int] = []
+			for other in Const_.POWERUP_COUNT:
+				if other != Types_.PowerUp.RANDOM:
+					pool.append(other)
+			return give_powerup(p, pool[rng.randi_range(0, pool.size() - 1)])
+
+		Types_.PowerUp.DISEASE, Types_.PowerUp.SUPER_BAD_DISEASE:
+			# Counted like any other pickup — VALUELST 122's wording, "will a
+			# disease recycle like other powerups when it COMES OUT OF YOU",
+			# only makes sense if the game tracks that you took one, and the
+			# match statistics need it. repopulate_powerups() is what then
+			# declines to put it back.
+			p.collected[which] += 1
+			var pool: Array = Types_.ORDINARY_DISEASES \
+				if which == Types_.PowerUp.DISEASE else Types_.SUPER_BAD_DISEASES
+			return _inflict(p, pool)
+
+	if at_cap(p, which):
+		return false
+	p.collected[which] += 1
+
+	match which:
+		Types_.PowerUp.BOMB:
+			p.bombs_total += 1
+			p.bombs_available += 1
+		Types_.PowerUp.FLAME:
+			p.flame_len += 1
+		Types_.PowerUp.GOLDFLAME:
+			# Straight to the maximum rather than +1. The cap on FLAME is the
+			# maximum, so this is that number and not an invented "infinity".
+			p.flame_len = cap_of(Types_.PowerUp.FLAME)
+		Types_.PowerUp.SKATE:
+			# ADDITIVE, not multiplicative — ORACLE row 3. fpc_atomic scales by
+			# 1.1 per skate, which is its own invention.
+			p.speed += Values_.V[Const_.Res.SKATE_BONUS]
+			p.speed_before_slow = p.speed
+		Types_.PowerUp.KICK:
+			p.can_kick = true
+		Types_.PowerUp.PUNCH:
+			p.can_punch = true
+			_drop_trigger(p)
+		Types_.PowerUp.GRAB:
+			p.can_grab = true
+		Types_.PowerUp.SPOOGE:
+			p.can_spooge = true
+			_drop_trigger(p)
+		Types_.PowerUp.JELLY:
+			p.jelly_bombs = true
+		Types_.PowerUp.TRIGGER:
+			# Trigger is exclusive with spooge and punch, and taking it DROPS
+			# both. AtomBomberman's notes: "you can have oil+punch, but you
+			# cant have trigger+oil or trigger+punch / if you have oil+punch
+			# and you pick-up trigger, you will drop oil AND punch".
+			p.can_spooge = false
+			p.can_punch = false
+			p.collected[Types_.PowerUp.SPOOGE] = 0
+			p.collected[Types_.PowerUp.PUNCH] = 0
+			# Topping up an existing trigger stock rather than replacing it —
+			# VALUELST 0.13003's changelog: "give extra trigger bomb if
+			# availibility already exists and a new bomb is taken".
+			p.trigger_bombs += p.bombs_total
+	return true
+
+
+## Rebuild everything a player's powerups DERIVE from what they still hold.
+##
+## give_powerup() applies each one as it arrives, which is right while they only
+## ever arrive. VALUELST 670 makes them leave — "what's the minimum number of
+## powers you lose when hit on the head?" — and undoing each kind by hand would
+## be thirteen inverse rules, several of which do not have one (GOLDFLAME sets
+## flame_len to the cap outright, so subtracting one is meaningless).
+##
+## So the derived values are recomputed from `collected` and the same VALUELST
+## numbers a player is born with. Speed is written through `speed_before_slow`
+## rather than to `speed`, because Molasses and Crack own `speed` while they
+## last and _end_disease() restores it from there.
+func recompute_powers(p: Player_) -> void:
+	var base_bombs: int = Values_.V[Const_.Res.BORN_WITH_BASE
+		+ Types_.PowerUp.BOMB]
+	var base_flame: int = Values_.V[Const_.Res.BORN_WITH_BASE
+		+ Types_.PowerUp.FLAME]
+	var spent: int = p.bombs_total - p.bombs_available
+	p.bombs_total = maxi(1, base_bombs + p.collected[Types_.PowerUp.BOMB])
+	p.bombs_available = clampi(p.bombs_total - maxi(spent, 0), 0,
+		p.bombs_total)
+	if p.collected[Types_.PowerUp.GOLDFLAME] > 0:
+		p.flame_len = cap_of(Types_.PowerUp.FLAME)
+	else:
+		p.flame_len = maxi(1, base_flame + p.collected[Types_.PowerUp.FLAME])
+	var speed: int = Values_.V[Const_.Res.START_SPEED] \
+		+ p.collected[Types_.PowerUp.SKATE] \
+			* int(Values_.V[Const_.Res.SKATE_BONUS])
+	var was := p.speed_before_slow
+	p.speed_before_slow = speed
+	if p.speed == was:
+		# Not under a speed disease, so the live value moves with it.
+		p.speed = speed
+	p.can_kick = p.collected[Types_.PowerUp.KICK] > 0
+	p.can_punch = p.collected[Types_.PowerUp.PUNCH] > 0
+	p.can_grab = p.collected[Types_.PowerUp.GRAB] > 0
+	p.can_spooge = p.collected[Types_.PowerUp.SPOOGE] > 0
+	p.jelly_bombs = p.collected[Types_.PowerUp.JELLY] > 0
+	if p.collected[Types_.PowerUp.TRIGGER] <= 0:
+		p.trigger_bombs = 0
+
+
+## Spooge and punch are dropped when trigger is taken, and vice versa.
+func _drop_trigger(p: Player_) -> void:
+	p.trigger_bombs = 0
+	p.collected[Types_.PowerUp.TRIGGER] = 0
+
+
+# ---------------------------------------------------------------------------
+# Diseases
+# ---------------------------------------------------------------------------
+func _inflict(p: Player_, pool: Array) -> bool:
+	if pool.is_empty():
+		return false
+	return catch_disease(p, pool[rng.randi_range(0, pool.size() - 1)])
+
+
+## Give a player a disease. Returns false if they already had it.
+func catch_disease(p: Player_, disease: int) -> bool:
+	if p.has_disease(disease):
+		return false
+	p.disease_ticks[disease] = disease_duration(disease)
+	p.disease_freshness = 0
+	if disease == Types_.Disease.MOLASSES:
+		p.speed_before_slow = p.speed
+		p.speed = maxi(1, p.speed - Values_.V[Const_.Res.CLOG_PENALTY])
+	elif disease == Types_.Disease.CRACK or disease == Types_.Disease.CRACK_POOPS:
+		p.speed_before_slow = p.speed
+		p.speed += Values_.V[Const_.Res.SKATE_BONUS]
+	_play(p.slot, Types_.SoundEffect.DISEASE_CAUGHT, disease)
+	return true
+
+
+## How long a disease lasts, in ticks.
+##
+## VALUELST holds NINE duration slots (130..138) for TWELVE diseases, and which
+## name maps to which slot is not established — docs/BUGS.md Q1. All nine hold
+## 300, so this is currently exact for every disease whatever the mapping is;
+## the modulo keeps it in range and is the one line to revisit if a slot is
+## ever re-tuned.
+func disease_duration(disease: int) -> int:
+	var slot: int = disease % Const_.DISEASE_DURATION_SLOTS
+	return Values_.V[Const_.Res.DISEASE_DURATION_BASE + slot]
+
+
+func cure_all(p: Player_) -> void:
+	for d in Types_.DISEASE_COUNT:
+		if p.disease_ticks[d] > 0:
+			_end_disease(p, d)
+
+
+func _end_disease(p: Player_, disease: int) -> void:
+	p.disease_ticks[disease] = 0
+	if disease == Types_.Disease.MOLASSES or disease == Types_.Disease.CRACK \
+			or disease == Types_.Disease.CRACK_POOPS:
+		p.speed = p.speed_before_slow
+
+
+func _tick_diseases() -> void:
+	if Values_.V[Const_.Res.DISEASE_TIME_LIMITED] == 0:
+		return
+	for p in players:
+		if not p.alive:
+			continue
+		p.disease_freshness += 1
+		for d in Types_.DISEASE_COUNT:
+			if p.disease_ticks[d] <= 0:
+				continue
+			p.disease_ticks[d] -= 1
+			if p.disease_ticks[d] == 0:
+				_end_disease(p, d)
+
+
+## Pass a disease on by contact. Whether it MULTIPLIES or hands off is
+## VALUELST 123, which says multiply — the giver keeps it.
+##
+## The freshness lock (resource 129, 10 frames) is what stops one contact
+## passing a disease several times in consecutive ticks.
+func spread_disease(from: Player_, to: Player_) -> bool:
+	if from.disease_freshness < Values_.V[Const_.Res.DISEASE_FRESHNESS]:
+		return false
+	var passed := false
+	for d in from.active_diseases():
+		if catch_disease(to, d):
+			passed = true
+			if Values_.V[Const_.Res.DISEASE_MULTIPLIES] == 0:
+				_end_disease(from, d)
+	return passed
+
+
+## Scatter a dead player's powerups back onto the field.
+##
+## VALUELST 122 says diseases do NOT recycle, so only the ordinary powerups
+## come back. fpc_atomic does the same at its 0.07004 ("Respawn collected
+## powerups of dead player").
+func repopulate_powerups(p: Player_) -> int:
+	var returned := 0
+	for which in Const_.POWERUP_COUNT:
+		# The two disease powerups are skipped: VALUELST 122 says a disease
+		# does not recycle when it leaves a player.
+		if which == Types_.PowerUp.DISEASE \
+				or which == Types_.PowerUp.SUPER_BAD_DISEASE:
+			continue
+		for _i in p.collected[which]:
+			if field.scatter_powerup(which, rng):
+				returned += 1
+		p.collected[which] = 0
+	return returned
+
+
+# ---------------------------------------------------------------------------
+# Hashing
+# ---------------------------------------------------------------------------
+## FNV-1a over the whole simulation state, 64-bit.
+##
+## The parity primitive. Phase 5 asserts client and server agree on it every
+## broadcast; Track C diffs it against the C oracle per tick. Anything that can
+## diverge must be in here — a field left out is a divergence no test can see,
+## which is why players and bombs contribute their full byte records rather
+## than a summary.
+##
+## Bombs are sorted by cell first. Two engines that place the same bombs in a
+## different array order are not diverging, and a hash that said they were
+## would be a hash nobody trusts.
+func state_hash() -> int:
+	var buf := PackedByteArray()
+	Player_._append_i32(buf, tick_count)
+	# The ROUND state belongs in the hash too. It was left out at first, and
+	# tests/test_net.gd caught it: a client whose clock, Hurry wall, outcome or
+	# winner had desynced would have hashed identical to the server, which is
+	# exactly the failure the netcode's equality assertion exists to catch.
+	Player_._append_i32(buf, time_left)
+	Player_._append_i32(buf, hurry_index)
+	buf.append(outcome)
+	buf.append(clampi(winner_slot + 1, 0, 255))
+	buf.append(clampi(winner_team + 1, 0, 255))
+	buf.append(int(team_play))
+	buf.append_array(field.to_bytes())
+	# The level geometry is hashed but never sent per tick: it cannot change,
+	# and both sides derive it from the level and the seed. Hashing it is what
+	# proves they derived the same thing.
+	buf.append_array(field.static_bytes())
+
+	var slots := []
+	for p in players:
+		slots.append(p)
+	slots.sort_custom(func(a, b): return a.slot < b.slot)
+	for p in slots:
+		buf.append_array(p.to_bytes())
+
+	var ordered := bombs.duplicate()
+	ordered.sort_custom(func(a, b):
+		return (a.y * Const_.FIELD_W + a.x) < (b.y * Const_.FIELD_W + b.x))
+	for b in ordered:
+		buf.append_array(b.to_bytes())
+
+	return fnv1a(buf)
+
+
+# FNV-1a's 64-bit offset basis is 0xCBF29CE484222325 = 14695981039346656037,
+# which does not fit in a GDScript int — those are SIGNED 64-bit, and Godot
+# rejects the hex literal outright with "Cannot represent ... as a 64-bit
+# signed integer". Written here as the same bit pattern reinterpreted as
+# signed, which is what the arithmetic below needs: the multiply wraps modulo
+# 2^64 either way, so the resulting hash is standard FNV-1a.
+#
+# This was silently broken first: the rejected literal left the constant at a
+# wrong value, and every test still passed because they only asserted that the
+# hash CHANGES, never what it is. test_sim.gd now pins a known digest.
+const FNV_OFFSET := -3750763034362895579   # 0xCBF29CE484222325 as int64
+const FNV_PRIME := 0x100000001B3           # 1099511628211, fits signed
+
+
+static func fnv1a(data: PackedByteArray) -> int:
+	var h: int = FNV_OFFSET
+	for byte in data:
+		h ^= byte
+		h *= FNV_PRIME
+	return h
+
+
+# ---------------------------------------------------------------------------
+# Campaign mode: rovers and ghosts
+# ---------------------------------------------------------------------------
+#
+# The two resources that govern them are 1200 ("chance that a ghost or rover
+# will change directions at an intersection", 1-in-3) and 1205 ("chance that
+# the direction change will NOT towards a human", 1-in-3). Everything else is
+# this port's, and scripts/sim/creature.gd lists what and why.
+
+
+## Put a creature on the field. Campaign stages say how many and how fast; the
+## caller picks the cells, because "where" is a property of the scheme rather
+## than of the creature.
+func add_creature(kind: int, tx: int, ty: int, speed: int) -> RefCounted:
+	var c: Creature_ = Creature_.new()
+	c.kind = kind
+	c.speed = speed
+	c.place_at_tile_centre(tx, ty)
+	c.facing = Creature_.DIRECTIONS[rng.randi_range(
+		0, Creature_.DIRECTIONS.size() - 1)]
+	creatures.append(c)
+	return c
+
+
+func creature_count(kind: int = -1) -> int:
+	var n := 0
+	for c in creatures:
+		if c.alive and not c.dying and (kind < 0 or c.kind == kind):
+			n += 1
+	return n
+
+
+func _tick_creatures() -> void:
+	for c in creatures:
+		if not c.alive:
+			continue
+		if c.dying:
+			# One tick of dying, then gone — there is no death animation on the
+			# disc for these, only the four walking directions.
+			c.alive = false
+			continue
+		_move_creature(c)
+		# Flame kills it where it stands, and the kill is scored to whoever
+		# owns that flame.
+		if field.has_flame(c.tile_x(), c.tile_y()):
+			var owner: int = field.flame_owner_at(c.tile_x(), c.tile_y())
+			_kill_creature(c, -1 if owner == Field_.NO_OWNER else owner)
+			continue
+		# Touching a player kills the player. Cell for cell, the way flame
+		# does: the notes say flames go through bombermen, and a monster that
+		# needs pixel overlap would be a different game from the one the cells
+		# describe.
+		for p in players:
+			if not p.alive or p.dying or not p.in_play:
+				continue
+			if p.invulnerable > 0 or p.fly_ticks > 0:
+				continue
+			if p.tile_x() == c.tile_x() and p.tile_y() == c.tile_y():
+				kill(p)
+
+
+func _kill_creature(c: RefCounted, by: int) -> void:
+	c.dying = true
+	c.death_tick = tick_count
+	c.killed_by = by
+	if by >= 0 and by < round_score.size():
+		round_score[by] += Values_.V[
+			Const_.Res.SCORE_ROVER if c.kind == Creature_.Kind.ROVER
+			else Const_.Res.SCORE_GHOST]
+		if by < round_kills.size():
+			round_kills[by] += 1
+	_play(by, Types_.SoundEffect.PLAYER_DIED)
+
+
+## One creature's step. It walks in a straight line until the cell ahead is
+## closed to it, and at an intersection it may turn anyway — 1-in-1200.
+func _move_creature(c: RefCounted) -> void:
+	var ahead: Vector2i = Types_.DIR_VEC[c.facing]
+	var at_centre: bool = (c.x % Player_.TILE_W_CP == Player_.TILE_W_CP / 2) \
+		and (c.y % Player_.TILE_H_CP == Player_.TILE_H_CP / 2)
+
+	if at_centre:
+		var options := _creature_options(c)
+		if options.is_empty():
+			return                      # boxed in; nothing to do but wait
+		var blocked: bool = not c.can_enter(field, c.tile_x() + ahead.x,
+			c.tile_y() + ahead.y)
+		var turning: bool = blocked
+		if not turning and options.size() > 1:
+			# Resource 1200: at a junction it may turn for no reason at all.
+			turning = rng.randi_range(1,
+				Values_.V[Const_.Res.CREATURE_TURN_CHANCE]) == 1
+		if turning:
+			c.facing = _creature_choose(c, options)
+			ahead = Types_.DIR_VEC[c.facing]
+		if not c.can_enter(field, c.tile_x() + ahead.x, c.tile_y() + ahead.y):
+			return
+
+	c.x += ahead.x * c.speed
+	c.y += ahead.y * c.speed
+
+
+## The directions this creature could take from the cell it is standing on.
+func _creature_options(c: RefCounted) -> Array[int]:
+	var out: Array[int] = []
+	for dir in Creature_.DIRECTIONS:
+		var step: Vector2i = Types_.DIR_VEC[dir]
+		if c.can_enter(field, c.tile_x() + step.x, c.tile_y() + step.y):
+			out.append(dir)
+	return out
+
+
+## Which way to turn. Resource 1205 is the chance the choice is NOT toward a
+## human — so four times in five it hunts, and the fifth it wanders.
+func _creature_choose(c: RefCounted, options: Array[int]) -> int:
+	var away: bool = rng.randi_range(1,
+		Values_.V[Const_.Res.CREATURE_AWAY_CHANCE]) == 1
+	if away:
+		return options[rng.randi_range(0, options.size() - 1)]
+
+	var target := _nearest_player_cell(c)
+	if target.x < 0:
+		return options[rng.randi_range(0, options.size() - 1)]
+
+	var best: int = options[0]
+	var best_d: int = 1 << 30
+	for dir in options:
+		var step: Vector2i = Types_.DIR_VEC[dir]
+		var d: int = absi(c.tile_x() + step.x - target.x) \
+			+ absi(c.tile_y() + step.y - target.y)
+		if d < best_d:
+			best_d = d
+			best = dir
+	return best
+
+
+func _nearest_player_cell(c: RefCounted) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var best_d: int = 1 << 30
+	for p in players:
+		if not p.alive or p.dying or not p.in_play:
+			continue
+		var d: int = absi(p.tile_x() - c.tile_x()) + absi(p.tile_y() - c.tile_y())
+		if d < best_d:
+			best_d = d
+			best = Vector2i(p.tile_x(), p.tile_y())
+	return best
