@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-17 — documentation
+
+Added the top-level `README.md` (full technical writeup, original-vs-port
+screenshots) and `HUMAN_README.md` (plain-language summary). Screenshots in
+`docs/screenshots/`: the original's own extracted title/menu/field art next
+to the Godot port rendering the same screens live.
+
 This is the first commit, so this entry covers the state of the port at that
 point rather than a diff against a prior release. Going forward, each entry
 records what changed and why — the day-by-day defect history, with full
