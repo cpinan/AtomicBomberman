@@ -751,6 +751,25 @@ func _draw_flame_piece(on: CanvasItem, seq: String, tx: int, ty: int,
 ## width lands on a .5 boundary. Flooring here instead makes every piece's
 ## offset already an integer, so `_draw_frame`'s later `.round()` is a no-op
 ## and every piece rounds the same direction as every other.
+##
+## THAT FIX IS NOT THE WHOLE STORY. Measured across `flame midnorth green`'s
+## actual five animation frames, width alternates **22, 27, 22, 24, 25** —
+## even, odd, even, even, odd. The centre piece is a constant 41 (odd) at
+## every age. Centring an ODD-width sprite in this 40-wide (even) cell is
+## exact only up to a half pixel no matter which way the tie breaks — the
+## true left edge is a `.5` value, full stop — and an EVEN-width sprite's
+## left edge is instead an exact integer with no tie to break at all. So an
+## odd-width piece and an even-width piece can share a formula and a floor
+## and STILL land half a pixel apart, because the source art itself alternates
+## parity frame to frame: on 2 of north's 5 frames (27, 25) its width matches
+## the centre's parity and the two align exactly; on the other 3 (22, 22, 24)
+## it does not, and they are 0.5 design px (≈1.5 device px at this project's
+## default 3x integer scale) apart. No choice of floor/round/ceil here removes
+## this — it would need either sub-pixel (unsnapped) drawing, which risks
+## every other sprite's crispness for one sequence's sake, or repadding
+## MFLAME's own frames in the extraction pipeline so every sequence shares one
+## width parity, which is an asset-pipeline change, not a renderer one.
+## Recorded rather than chased further here — docs/BUGS.md Q10.
 static func _centre(cell: int, sprite: float) -> float:
 	return floorf((cell - sprite) / 2.0)
 

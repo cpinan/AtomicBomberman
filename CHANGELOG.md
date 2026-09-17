@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-09-17 — project icon, GitHub topics, doc fix, flame Q10
+
+- **Project icon**: `godot-project/project.godot` now points `config/icon`
+  at the original's own app icon, extracted from `BM95.EXE`'s resources
+  (`tools/containers.py`'s winres stage). Not committed — `icon.png` is
+  gitignored alongside every other extracted asset; a fresh clone needs its
+  own disc extraction to have it.
+- **GitHub topics** added to the repo: pc, godot, godot4, bomberman,
+  atomic-bomberman, reverse-engineering, game-port, gdscript.
+- **`docs/AUDIT.md`**: fixed a stale table row claiming keyboard definitions
+  are unimplemented — superseded by the "Key rebinding" row further down,
+  which correctly says yes. Left over from before that feature was built.
+- **Flame centre/north alignment — root cause finally settled, not a bug.**
+  Two earlier fixes this session narrowed it but didn't close it. The real
+  cause: the centre flame piece is a constant 41px wide (odd) and the cell
+  is 40px (even) — centring an odd-width sprite in an even-width cell always
+  leaves an exact 0.5px remainder, and no choice of floor/round/ceil changes
+  that. North's own frame width alternates 22/27/22/24/25px across its
+  5-frame animation, so it lands exactly on-centre on the 3 frames that
+  share the cell's even parity and 0.5px off on the other 2 — an inherent
+  property of the extracted art's own frame dimensions. Documented as Q10
+  in `docs/BUGS.md`, with what would actually fix it (sub-pixel rendering,
+  or repadding the extracted frames to unify parity) and why neither was
+  done here.
+- **Confirmed, not a bug**: an exposed powerup on open ground IS destroyed
+  by flame reaching it (already covered by `tests/test_bomb.gd`, and a
+  fresh repro this session: 9/9 checks). A powerup a blast just REVEALS by
+  breaking its brick survives that same blast — the arm has already ended
+  at that cell — which is intentional: a powerup is a reward for breaking a
+  wall, not something the same explosion should also delete.
+- **UI audit**: reviewed HUD, options, setup, key-rebinding, and victory
+  screens against `docs/AUDIT.md`'s record of the original. No missing or
+  broken screens found. The original has no pause feature to port (checked
+  `MANUAL.BM`/`INPUT.BM` directly — zero mentions).
+
 ## 2026-09-17 — documentation
 
 Added the top-level `README.md` (full technical writeup, original-vs-port

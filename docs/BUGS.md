@@ -389,6 +389,43 @@ its static geometry — is now exercised by real packets rather than only by
 
 Resource `35` is **11**, not 35: 35 is the resource number. Corrected below.
 
+### Q10 — The flame centre and an arm can be half a pixel apart, and it is not a rounding bug
+**Status:** measured 2026-09-17, root cause proven, not fixed further. Low
+visual impact, high investigation cost — recorded so it is not re-chased.
+
+Reported three times live as "the explosion's top piece doesn't line up with
+the centre," after two rounds of fixes to `game_view.gd`'s flame-piece
+centring (an inbound-edge-flush fix for `flame tipeast green`'s undersize,
+then a floor-before-round fix for a tie-breaking asymmetry). Both fixes were
+real and are still correct — and neither was the whole story.
+
+**Measured from the actual loaded pack**, not assumed: `flame center green`
+is a constant 41 px wide at every animation age. `flame midnorth green`'s
+five frames are **22, 27, 22, 24, 25** — even, odd, even, even, odd. Centring
+a 41 px (odd) sprite in this port's 40 px (even) cell always leaves a `.5`
+px remainder no matter which way it rounds; centring an even-width sprite in
+the same cell leaves no remainder at all — there is no tie to break. So on
+the two ages where north's width is also odd (27, 25) the two pieces' parities
+match and they land pixel-exact; on the other three (22, 22, 24) they are
+mechanically **0.5 design pixels (≈1.5 device pixels at this project's
+default 3x integer scale) apart**, for 3 of every 5 animation frames. This is
+a property of the extracted art's own frame widths, not of the rounding
+function — floor, round and ceil were all checked algebraically and every one
+produces the identical result: whichever piece's width shares the cell's own
+even parity centres exactly, and whichever does not is 0.5 px off, forever.
+
+**Would need one of two real fixes, neither attempted here:** sub-pixel
+(unsnapped) drawing for flame pieces specifically, which risks every other
+sprite's pixel-art crispness for one sequence's sake and was not attempted
+without more testing; or repadding MFLAME's frames by one pixel in the
+extraction pipeline (`tools/anifile.py`/`tools/pack_assets.py`) so every
+sequence shares one width parity — a content change to a generated,
+gitignored asset, not a renderer change, and out of scope for the pass that
+found this.
+
+**Would settle it:** either fix above, tried and pixel-measured against a
+live screenshot the way this was found.
+
 ### Q5 — The four algorithms the data cannot express
 **Status:** open, but no longer blocked, and now LOCATED. `BM95.EXE` arrived
 2026-09-02 and `tools/bmexe.py` maps it.

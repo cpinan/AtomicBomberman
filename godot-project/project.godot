@@ -6,6 +6,12 @@ config_version=5
 [application]
 
 config/name="Atomic Bomberman"
+; The original's own app icon, extracted from the disc (tools/containers.py's
+; winres stage, res_00123c). Never committed — see .gitignore — for the same
+; reason no other extracted original art is: it's Interplay's, not this
+; project's to redistribute. A local build has it; a fresh clone does not
+; until it extracts its own copy of the disc.
+config/icon="res://icon.png"
 config/features=PackedStringArray("4.4", "GL Compatibility")
 run/main_scene="res://scenes/main.tscn"
 ; A port that opens on the Godot splash is a port with a seam in it.

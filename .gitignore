@@ -43,6 +43,10 @@ __pycache__/
 /godot-project/data/packs/sfx/
 /godot-project/data/packs/sfx.bin
 
+# The project/window icon, extracted from BM95.EXE's own resources
+# (tools/containers.py). Same rule as everything else pulled off the disc.
+/godot-project/icon.png
+
 # macOS
 .DS_Store
 

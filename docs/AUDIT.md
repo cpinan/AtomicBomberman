@@ -67,7 +67,7 @@ so no bomb is placed and no brick is destroyed on that machine to count.
 server hands its multiplayer peer a single broadcast and never sees the
 fan-out.
 | Network game list | none | **NO** | `MESSAGES.TXT` 60-66 and 620-634 describe a server browser and a protocol chooser. The port's netcode takes a URL instead |
-| Keyboard definitions | none | **NO** | `MESSAGES.TXT` 1100-1130 names the screen and all six actions |
+| Keyboard definitions | none | **yes, superseded below** | `MESSAGES.TXT` 1100-1130 names the screen and all six actions — see "Key rebinding" further down, the entry this row duplicated before it was implemented |
 | Modem / serial setup | none | **not applicable** | `MESSAGES.TXT` 640-648. The transport is WebSocket |
 | Level editor | `EDIT.ANI`, `MESSAGES.TXT` 700-753 | **NO** | a separate program on the disc (`TOOLS/FREDIT.EXE`) |
 
