@@ -795,6 +795,18 @@ func _explode(b: Bomb_) -> void:
 	field.add_flame(b.tile_x(), b.tile_y(), Types_.Flame.CROSS, b.chain_owner,
 		_flame_ticks)
 
+	# A powerup can be sitting on the bomb's own tile — a scattered pickup
+	# landing there after the bomb was already placed, or a test editor drop
+	# (docs/BUGS.md Q10's sibling case: _propagate()'s arm loop below starts
+	# at n=1, one cell OUT from the bomb, and never looked at the bomb's own
+	# cell at all). A live player can't normally leave one under themselves —
+	# _collect_powerup() picks it up the same tick they stand on it — but
+	# nothing stops one arriving after the bomb is already down. The arms
+	# destroy a powerup they reach; the epicentre burns every bit as hot and
+	# was silently letting one survive.
+	if field.has_powerup(b.tile_x(), b.tile_y()):
+		field.powerup[Field_.idx(b.tile_x(), b.tile_y())] = Field_.NO_POWERUP
+
 	# ARM ORDER IS THE ORIGINAL'S, and it is the direction table's own:
 	# 0x45BECC/0x45BEDC are (0,-1) (1,0) (0,1) (-1,0) — up, right, down, left —
 	# and 0x423FA4's loop walks each arm to its end before starting the next.
@@ -938,6 +950,30 @@ func _tick_the_dying() -> void:
 			continue
 		if tick_count - p.death_tick >= DEATH_TICKS:
 			p.alive = false
+
+
+## Whether any player's death animation is still playing.
+##
+## `dying` is set once, in kill(), and NEVER cleared — it is not "is this
+## player currently animating a death", it is "has this player died this
+## round at all". `alive` is what `_tick_the_dying()` flips to false once
+## DEATH_TICKS have passed, which is the actual end of the animation. So the
+## still-animating test is both flags together, not `dying` alone — testing
+## `dying` alone would stay true for the rest of the round after the first
+## death and stall the caller forever.
+##
+## `_check_round_over()` drops a dying player from `standing` the instant
+## they die, so a cornered last-standing player's death can end the round on
+## the very same tick their animation starts — and DEATH_TICKS' own header
+## promises "every one of the 24 gets to finish". The caller (main.gd's
+## round/match transition) uses this to hold the intermission open rather
+## than tearing the Sim down — and the corpse it is rendering — out from
+## under an animation that has not.
+func anyone_dying() -> bool:
+	for p in players:
+		if p.dying and p.alive:
+			return true
+	return false
 
 
 func kill(p: Player_, by: int = -1) -> void:
@@ -1429,8 +1465,15 @@ func _player_blocked(tx: int, ty: int) -> bool:
 
 
 ## Can a rolling bomb enter this cell? Blocked by the field, by another bomb,
-## and by a player — a bomb cannot roll through someone.
-func _bomb_blocked(b: Bomb_, tx: int, ty: int) -> bool:
+## and — for a bomb ROLLING along the ground — by a player, since a bomb
+## cannot roll through someone.
+##
+## `for_landing`, for a bomb arriving by air (punch/throw), skips that last
+## check: landing ON a player is `_bomb_on_the_head()`'s whole mechanic, not
+## an obstruction. Still stopped by everything else — the field, a warp, a
+## trampoline, another bomb — which is the port's own rule for what
+## `_landing_cell()` treats as occupied; the disassembly does not say.
+func _bomb_blocked(b: Bomb_, tx: int, ty: int, for_landing: bool = false) -> bool:
 	if not field.is_open(tx, ty):
 		return true
 	# A warp gate stops a bomb — the notes: teleports "stop bombs".
@@ -1443,6 +1486,8 @@ func _bomb_blocked(b: Bomb_, tx: int, ty: int) -> bool:
 	var other := bomb_at(tx, ty)
 	if other != null and other != b:
 		return true
+	if for_landing:
+		return false
 	for p in players:
 		if not p.alive or p.dying:
 			continue
@@ -1535,6 +1580,29 @@ func _bomb_on_the_head(b: Bomb_) -> void:
 			_play(p.slot, Types_.SoundEffect.BOMB_HIT_HEAD)
 
 
+## The furthest open cell along a straight line, up to `max_dist` out.
+##
+## A flying bomb crosses whatever ground is under its arc — that is the whole
+## point of punching or throwing one over a brick — so only where it LANDS
+## needs to be clear, not the cells it passes over, and landing ON A PLAYER
+## is not an obstruction, it is `_bomb_on_the_head()`. Nothing in VALUELST or
+## the disassembly says what the original does when the intended landing
+## spot has another BOMB already on it; this is the port's own call, made
+## the same way a rolling (kicked) bomb already behaves — it stops on the
+## nearest open cell rather than overwriting whatever is there.
+func _landing_cell(b: Bomb_, from_tx: int, from_ty: int, dir: int,
+		max_dist: int) -> Vector2i:
+	var step: Vector2i = Types_.DIR_VEC[dir]
+	var landing := Vector2i(from_tx, from_ty)
+	for n in range(1, max_dist + 1):
+		var tx: int = from_tx + step.x * n
+		var ty: int = from_ty + step.y * n
+		if not Field_.in_bounds(tx, ty) or _bomb_blocked(b, tx, ty, true):
+			break
+		landing = Vector2i(tx, ty)
+	return landing
+
+
 ## Send a bomb flying to a cell. The flight time comes from the distance and
 ## the speed, so a bomb crosses ground at the tabulated rate rather than at a
 ## made-up number of ticks.
@@ -1617,11 +1685,11 @@ func punch_bomb(p: Player_) -> bool:
 	var b := bomb_at(p.tile_x() + step.x, p.tile_y() + step.y)
 	if b == null:
 		return false
-	var tx := b.tile_x() + step.x * 3
-	var ty := b.tile_y() + step.y * 3
-	# Clamp into the field rather than punching a bomb off the map.
-	tx = clampi(tx, 0, Const_.FIELD_W - 1)
-	ty = clampi(ty, 0, Const_.FIELD_H - 1)
+	# Three cells through the air, but no further than the nearest open one —
+	# see _landing_cell(). Field bounds are one case of "not open".
+	var landing := _landing_cell(b, b.tile_x(), b.tile_y(), p.facing, 3)
+	var tx := landing.x
+	var ty := landing.y
 	b.move_dir = p.facing
 	b.jelly_bounce = p.jelly_bombs
 	b.bounces_left = 3
@@ -1663,9 +1731,12 @@ func throw_bomb(p: Player_) -> bool:
 	for b in bombs:
 		if b.carried_by != p.slot:
 			continue
-		var step: Vector2i = Types_.DIR_VEC[p.facing]
-		var tx := clampi(p.tile_x() + step.x * 3, 0, Const_.FIELD_W - 1)
-		var ty := clampi(p.tile_y() + step.y * 3, 0, Const_.FIELD_H - 1)
+		# Three cells ahead, but no further than the nearest open one — a
+		# thrown bomb landing where another bomb already sits was the port's
+		# own gap (docs/BUGS.md), not a case _bomb_blocked() left uncovered.
+		var landing := _landing_cell(b, p.tile_x(), p.tile_y(), p.facing, 3)
+		var tx := landing.x
+		var ty := landing.y
 		b.carried_by = -1
 		b.move_dir = p.facing
 		b.jelly_bounce = p.jelly_bombs

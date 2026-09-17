@@ -733,45 +733,41 @@ func _draw_flame_piece(on: CanvasItem, seq: String, tx: int, ty: int,
 		# the centre piece has no direction to be flush against
 		at.x += _centre(Const_.BLOCK_W, src.size.x)
 		at.y += _centre(Const_.BLOCK_H, src.size.y)
-	_draw_frame("mflame", index, at, false, Color.WHITE, on, true)
+	# snap=false: a flame piece's centring offset is deliberately fractional
+	# (Q10) and rounding it back to a pixel is exactly the bug this is fixing.
+	_draw_frame("mflame", index, at, false, Color.WHITE, on, true, false)
 
 
-## (cell - sprite) / 2, floored rather than left for `_draw_frame`'s own
-## `.round()` to settle.
+## (cell - sprite) / 2, kept as an exact fraction — NOT floored, NOT left for
+## `_draw_frame`'s `.round()` to settle. Two earlier attempts rounded this to
+## a pixel and neither could be exactly right at once for every piece:
 ##
-## Godot's `round()` breaks a .5 tie AWAY FROM ZERO, not toward one side —
-## `round(-0.5) == -1` but `round(6.5) == 7`. MFLAME's centre piece is 41 px
-## on this 40 px cell (offset -0.5) and north's widest mid-frame is 27 px
-## (offset +6.5): one sign is negative, the other positive, so the SAME rule
-## rounds them to OPPOSITE sides of the tie and the two pieces land a full
-## pixel apart even though both are "centred" by the same formula. That is
-## what "the sprite on top of the centre is a bit to the right" was — every
-## piece narrower than the cell (a positive offset) drifted right of every
-## piece wider than it (a negative offset), one pixel, only on frames whose
-## width lands on a .5 boundary. Flooring here instead makes every piece's
-## offset already an integer, so `_draw_frame`'s later `.round()` is a no-op
-## and every piece rounds the same direction as every other.
+## Godot's `round()` breaks a .5 tie AWAY FROM ZERO — `round(-0.5) == -1` but
+## `round(6.5) == 7` — so a piece narrower than the cell (positive offset) and
+## one wider (negative offset) round to OPPOSITE sides of a tie even from the
+## identical formula. Flooring first (the second attempt) made every offset
+## already an integer so that rule stopped mattering, but only relocated the
+## problem: `flame center green` is a constant 41 px (odd) on this 40 px
+## (even) cell, so its true centred offset is exactly `-0.5` — there is no
+## integer that is "centred", by construction, whichever way it rounds.
+## `flame midnorth green`'s own five animation frames are 22, 27, 22, 24, 25 px
+## wide (even, odd, even, even, odd), so on 3 of 5 ages its width shares the
+## cell's even parity and floors to a *different* pixel than the odd-width
+## centre piece does. Measured: a real, reproducible 0.5 design px (≈1.5
+## device px at this project's default 3x integer scale) seam, present on
+## exactly the frames the parities disagree on. docs/BUGS.md Q10.
 ##
-## THAT FIX IS NOT THE WHOLE STORY. Measured across `flame midnorth green`'s
-## actual five animation frames, width alternates **22, 27, 22, 24, 25** —
-## even, odd, even, even, odd. The centre piece is a constant 41 (odd) at
-## every age. Centring an ODD-width sprite in this 40-wide (even) cell is
-## exact only up to a half pixel no matter which way the tie breaks — the
-## true left edge is a `.5` value, full stop — and an EVEN-width sprite's
-## left edge is instead an exact integer with no tie to break at all. So an
-## odd-width piece and an even-width piece can share a formula and a floor
-## and STILL land half a pixel apart, because the source art itself alternates
-## parity frame to frame: on 2 of north's 5 frames (27, 25) its width matches
-## the centre's parity and the two align exactly; on the other 3 (22, 22, 24)
-## it does not, and they are 0.5 design px (≈1.5 device px at this project's
-## default 3x integer scale) apart. No choice of floor/round/ceil here removes
-## this — it would need either sub-pixel (unsnapped) drawing, which risks
-## every other sprite's crispness for one sequence's sake, or repadding
-## MFLAME's own frames in the extraction pipeline so every sequence shares one
-## width parity, which is an asset-pipeline change, not a renderer one.
-## Recorded rather than chased further here — docs/BUGS.md Q10.
+## The actual fix is upstream of rounding: don't round a flame piece's
+## position at all. `_draw_frame`'s `snap` parameter is `false` for every
+## flame call, so the fractional offset computed here reaches
+## `draw_texture_rect_region` untouched — Godot's canvas API takes floats
+## natively, and a glow-style translucent sprite loses nothing visible to a
+## 0.5 px shift the way a flat-shaded, hard-edged sprite (a player, a bomb)
+## would. Every other sprite kind still goes through `_draw_frame`'s default
+## `snap = true` and stays pixel-locked; only MFLAME's nine sequences ever
+## call this function.
 static func _centre(cell: int, sprite: float) -> float:
-	return floorf((cell - sprite) / 2.0)
+	return (cell - sprite) / 2.0
 
 
 # MFLAME.ANI's nine sequences map one-to-one onto the flame bits the sim sets:
@@ -988,9 +984,14 @@ func colour_of(slot: int) -> Color:
 	return Const_.player_colour_f(slot)
 
 
+## `snap` rounds the destination to a whole pixel, which is right for
+## everything authored as flat pixel art — a player, a bomb, a shadow — where
+## a fractional position blurs a crisp 1997 edge. Flame pieces pass `false`:
+## see `_centre()` and docs/BUGS.md Q10 for why they need the fraction kept.
 func _draw_frame(sheet: String, index: int, at: Vector2,
 		use_hotspot: bool, tint: Color = Color.WHITE,
-		on: CanvasItem = null, clip_to_field: bool = false) -> void:
+		on: CanvasItem = null, clip_to_field: bool = false,
+		snap: bool = true) -> void:
 	var tex := pack.texture_of(sheet)
 	if tex == null:
 		return
@@ -998,7 +999,7 @@ func _draw_frame(sheet: String, index: int, at: Vector2,
 	var top_left := at
 	if use_hotspot:
 		top_left = at - pack.frame_hotspot(sheet, index)
-	var dest := Rect2(top_left.round(), src.size)
+	var dest := Rect2(top_left.round() if snap else top_left, src.size)
 
 	# Clip to the playfield. A standing bomberman is 67 px of ink over a 36 px
 	# cell, so one on the top row reaches into the status area above the field

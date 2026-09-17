@@ -1169,17 +1169,24 @@ func _run_local_match() -> void:
 		else:
 			_intermission = 0
 	if _match_over_at >= 0 and sim.tick_count - _match_over_at \
-			>= Match_.intermission_ticks():
+			>= Match_.intermission_ticks() and not sim.anyone_dying():
 		# The victory screen, then the results, then the menu — which is the
 		# order MESSAGES.TXT implies: 120/121 announce the winner and 900-928
 		# are the statistics. _open_menu carries the match across so both
 		# screens have something to show.
+		#
+		# Held on anyone_dying() too: SCREEN_MIN_SECONDS (3s, 60 ticks) is a
+		# MINIMUM wait, and is shorter than DEATH_TICKS' own 5s guarantee that
+		# every death animation gets to finish (up to XPLODE4's 93 steps).
+		# The round-deciding kill is exactly the death a player is watching —
+		# without this, the match-winning screen could cut it off mid-frame.
 		_match_over_at = -1
 		_open_menu(Screens_.Screen.VICTORY if not _was_draw()
 			else Screens_.Screen.DRAW)
 	if _intermission >= 0:
 		_intermission += 1
-		if _intermission >= Match_.intermission_ticks():
+		if _intermission >= Match_.intermission_ticks() \
+				and not sim.anyone_dying():
 			_intermission = -1
 			the_match.next_round()
 			_start_local_round()

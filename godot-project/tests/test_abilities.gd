@@ -222,6 +222,31 @@ func _test_punch(t: T_) -> void:
 	t.ok(b4.tile_y() >= 0 and b4.tile_y() < Const_.FIELD_H,
 		"[invariant] in both axes")
 
+	# A punch toward an already-occupied cell lands short of it, rather than
+	# the two bombs sharing a cell — nothing pinned down what the original
+	# does here, so the port stops it the way a rolling bomb already stops:
+	# on the nearest open cell. docs/BUGS.md.
+	var s5 := _sim(1)
+	var p5: Player_ = s5.players[0]
+	p5.place_at_tile_centre(2, 5)
+	p5.facing = Types_.Dir.RIGHT
+	s5.give_powerup(p5, Types_.PowerUp.PUNCH)
+	var b5 := s5.place_bomb(p5)
+	b5.place_at_tile_centre(3, 5)
+	var blocker := Bomb_.new()
+	blocker.owner = 0
+	blocker.place_at_tile_centre(5, 5)
+	s5.bombs.append(blocker)
+	s5.punch_bomb(p5)
+	t.eq(b5.tile_y(), 5, "still travelling along the row")
+	t.ok(b5.tile_x() < 5, "lands short of the occupied cell, not on it")
+	for _i in 60:
+		s5.tick()
+		if not b5.flying and b5.bounces_left == 0:
+			break
+	t.ok(b5.tile_x() != blocker.tile_x() or b5.tile_y() != blocker.tile_y(),
+		"[invariant] two bombs never end up on the same cell")
+
 
 func _test_grab_and_throw(t: T_) -> void:
 	t.eq(Values_.V[Const_.Res.PICKUP_PAUSE_FRAMES], 2,

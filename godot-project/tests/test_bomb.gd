@@ -259,6 +259,20 @@ func _test_flame_stops(t: T_) -> void:
 	t.eq(s3.field.powerup[Field_.idx(7, 5)], Field_.NO_POWERUP,
 		"the powerup is destroyed")
 
+	# A powerup on the BOMB'S OWN TILE — the epicentre — burns too. A live
+	# player can't normally leave one under themselves (_collect_powerup()
+	# picks it up the same tick), but a scattered pickup can land there after
+	# the bomb is already down. _propagate()'s arm loop starts one cell OUT
+	# and never looked at the epicentre at all.
+	var s4 := _sim(1)
+	var p4: Player_ = s4.players[0]
+	p4.place_at_tile_centre(5, 5)
+	s4.place_bomb(p4)
+	s4.field.powerup[Field_.idx(5, 5)] = Types_.PowerUp.KICK
+	_run(s4, Values_.V[Const_.Res.FUZE_FRAMES])
+	t.eq(s4.field.powerup[Field_.idx(5, 5)], Field_.NO_POWERUP,
+		"a powerup on the epicentre is destroyed too")
+
 
 func _test_brick_destruction(t: T_) -> void:
 	var sim := _sim(1)

@@ -1673,6 +1673,39 @@ than undone one rule at a time.
 * The **cornerhead animations** — CORNER0..7, APPLBITE, NUCKBLOW, ZEN, and
   VALUELST 308's count of them. Decoration, and not packed.
 
+### D29 — A live session's own report, and what came of chasing each line
+
+**Found 2026-09-17 by a player actually running the build**, across several
+rounds of "here's what I'm seeing" while this session was still going. Six
+reports, six different outcomes — three real defects fixed, one already-fixed
+defect explained (the fix just hadn't been relaunched into yet), one
+confirmed-correct mechanic, one confirmed-correct piece of disc art mistaken
+for a bug. Kept together because the pattern — a live player finding things
+5,600+ passing checks couldn't — is the same one D21/D24/D27/D28 already
+established, and it held again.
+
+| # | What they saw | What it was |
+|---|---|---|
+| 1 | Bombs sometimes don't destroy walls | `_propagate()`'s stop-rule order tested "is there a powerup here" before "is this a brick" — and every powerup sits hidden UNDER a brick by design, so a flame hitting one destroyed the invisible powerup and stopped without ever touching the brick. Swept all 67 schemes: **1,540 of 4,268 bomb-adjacent-to-brick cases (36%) failed before the fix, 0 after** |
+| 2 | Explosion top doesn't line up with the centre | Not a rounding bug, in the end — an inherent limit. The centre piece is a constant 41px (odd) in a 40px (even) cell; centring an odd sprite in an even cell always leaves an exact 0.5px remainder, provably, for any choice of floor/round/ceil. `flame midnorth green`'s own frame width alternates 22/27/22/24/25px across its animation, landing exactly on-centre on the 3 frames that share the cell's parity and 0.5px off on the other 2. Recorded as **Q10** above. Fixed anyway: flame pieces now draw at their true fractional position instead of snapping to an integer pixel (`_draw_frame`'s new `snap` parameter, `false` for flame pieces only — every other sprite kind stays pixel-locked) |
+| 3 | Powerups aren't destroyed by explosions | Two different claims tangled together. An exposed powerup on open ground WAS already destroyed by flame reaching it (confirmed: 9/9 fresh checks, and `tests/test_bomb.gd` already covered it) — correct, unchanged. But a powerup sitting on the BOMB'S OWN TILE was never checked at all: `_explode()` unconditionally burns the epicentre but `_propagate()`'s arm loop starts one cell OUT and never looks back at the bomb's own cell. A live player can't normally leave a powerup under themselves — `_collect_powerup()` picks it up the same tick — but a scattered pickup landing there after the bomb is already down, or a debug-editor drop, could. Fixed: the epicentre now checks and destroys a powerup on its own cell too |
+| 4 | Bombs don't collide with each other | Rolling-bomb collision (`_bomb_blocked()`) was already correct — a kicked bomb stops against another bomb. The gap was in `_launch()`, shared by `punch_bomb()`/`throw_bomb()`: both computed a fixed destination (3 cells out) and clamped only to field bounds, with **no occupancy check** at all. A bomb mid-flight correctly can't collide (that's how a punch clears a brick), but nothing stopped it LANDING on top of another stationary bomb — two `Bomb_` records sharing one cell, with `bomb_at()`'s first-match lookup only ever seeing one of them. Fixed: a new `_landing_cell()` walks the throw/punch path and returns the furthest open cell, the same way a kicked bomb already stops short rather than passing through an obstacle |
+| 5 | AI movement is very erratic | Real, and measured: `_any_open_move()`, the wander fallback, re-rolled a brand-new random direction from scratch every single tick — 20 times a second — with no persistence at all, so an idle bot visibly vibrated rather than walking anywhere. The original's own catch-all handler (table slot 7, `0x40A81F`, already cited in this file's own header comment) keeps a persisted facing and only reconsiders it 1-in-25 ticks; the port had never implemented that half. Measured on an open field, 300 ticks, nothing nearby: **75% of ticks changed direction before the fix, 5% after** — matching the original's ~1-in-25 within sampling noise |
+| 6 | No death animation when there's no way to avoid a bomb | `sim.gd`'s own header comment promises `DEATH_TICKS` (100 ticks, 5s) is sized so every one of the 24 death animations gets to finish — but the round/match transition timer, `Match_.intermission_ticks()` (`SCREEN_MIN_SECONDS` × 20 = **60 ticks**), is shorter. `_check_round_over()` drops a dying player from `standing` the instant `kill()` sets `dying`, so a cornered kill — which is usually the round-deciding one, exactly "no way to avoid it" — could end the round on the same tick the animation started, and the next round tore the `Sim` down at 60 ticks, well before a longer animation (up to XPLODE4's 93 steps) finished. Fixed: new `Sim.anyone_dying()` (`p.dying and p.alive` — `dying` alone never clears, so testing it bare would stall the round forever after any death) gates both round-transition points in `main.gd` |
+
+**And one live report that wasn't a bug at all.** "Gauntlet-thrown bombs
+render the player instead of the bomb" — traced with a windowed probe all
+the way through: `carried_by`, `pickup_pause`, and `flying` all transition
+correctly, and the flying-bomb draw path correctly finds and draws
+`PUNBOMB4.ANI`'s `punch east` sequence. That sprite is a small green
+humanoid figure — because it is the disc's own art for a flying bomb in
+this game's chibi-robot style, decoded straight from `PUNBOMB4.ANI` with
+`tools/anifile.py` independent of the runtime pack, pixel-identical to what
+renders. Every character in Atomic Bomberman is bomb-shaped; a flying bomb
+apparently looks like a small bomberman rather than a plain sphere on the
+original's own art, which reads as "the player" at a glance and is not a
+defect anywhere in this pipeline.
+
 ## 3. Corrections made to this project's own documents
 
 Kept because a retracted claim that leaves no trace tends to come back.

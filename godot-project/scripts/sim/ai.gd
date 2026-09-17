@@ -150,7 +150,7 @@ func think(sim: RefCounted, p: Player_) -> Dictionary:
 			return {"move": _step_toward(flee_dist, here, latest),
 				"action": Types_.Action.NONE}
 		# Keep moving rather than standing still to die.
-		return {"move": _any_open_move(sim, here),
+		return {"move": _any_open_move(sim, p, here),
 			"action": Types_.Action.NONE}
 
 	# 3. A powerup within resource 920's radius.
@@ -218,7 +218,7 @@ func think(sim: RefCounted, p: Player_) -> Dictionary:
 		return {"move": _step_toward(safe_dist, here, goal),
 			"action": Types_.Action.NONE}
 
-	return {"move": _any_open_move(sim, here, danger),
+	return {"move": _any_open_move(sim, p, here, danger),
 		"action": Types_.Action.NONE}
 
 
@@ -520,7 +520,18 @@ func _escape_exists(sim: RefCounted, p: Player_, here: Vector2i,
 ## picked a random open direction — including straight back into the fire it
 ## had just left. Three bots in eight died that way, and reverting only this
 ## line brings all three back.
-func _any_open_move(sim: RefCounted, here: Vector2i,
+##
+## STICKS TO THE CURRENT DIRECTION rather than re-rolling one of up to four
+## open options every tick. This function runs from `think()`, which runs
+## every simulation tick (20 Hz) — with no persistence, a bot idling with
+## nothing to do picked a fresh random direction 20 times a second, visibly
+## vibrating rather than walking. The original's own catch-all entry (table
+## slot 7, 0x40A81F — the file header's THE PRIORITY ORDER, and docs/BUGS.md
+## Q5.4) keeps a persisted facing and only reconsiders it 1-in-25 ticks; that
+## is what this now does, using `p.move` itself as the persisted state rather
+## than adding a new field — it is already part of Player_.to_bytes(), so this
+## needs no change to the wire format or state_hash() to stay network-safe.
+func _any_open_move(sim: RefCounted, p: Player_, here: Vector2i,
 		avoid: PackedByteArray = PackedByteArray()) -> int:
 	var options: Array[int] = []
 	for pair in [[Vector2i(1, 0), Types_.MoveState.RIGHT],
@@ -537,4 +548,6 @@ func _any_open_move(sim: RefCounted, here: Vector2i,
 		options.append(int(pair[1]))
 	if options.is_empty():
 		return Types_.MoveState.STILL
+	if options.has(p.move) and sim.rng.randi_range(1, 25) != 1:
+		return p.move
 	return options[sim.rng.randi_range(0, options.size() - 1)]

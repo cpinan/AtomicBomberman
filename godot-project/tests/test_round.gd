@@ -270,6 +270,7 @@ func _test_dying(t: T_) -> void:
 	t.ok(p.death_anim >= 1 and p.death_anim <= Sim_.DEATH_ANIMS,
 		"and one of the disc's %d deaths chosen (%d)"
 			% [Sim_.DEATH_ANIMS, p.death_anim])
+	t.ok(sim.anyone_dying(), "anyone_dying() sees the animation in progress")
 
 	# THE ONE THAT SHOWED. A held key, tick after tick, on a dead player.
 	for _i in 10:
@@ -295,6 +296,24 @@ func _test_dying(t: T_) -> void:
 		"and gone %d ticks after the kill" % Sim_.DEATH_TICKS)
 	t.ok(Sim_.DEATH_TICKS >= 93,
 		"which is longer than the longest death the disc ships (93 steps)")
+	# anyone_dying() has to drop back to false once the body is gone, or a
+	# caller that holds a transition open on it (main.gd's round/match
+	# advance) would wait forever — `dying` itself is never cleared, only
+	# `alive` is, which is why anyone_dying() tests both.
+	t.ok(not sim.anyone_dying(),
+		"anyone_dying() clears once the animation has actually finished")
+
+	# The round-ENDING kill is the one this whole fix is about: the moment
+	# the last standing player dies, _check_round_over() drops them from
+	# `standing` on that same tick, well before their animation is done.
+	# main.gd's transition must not run while anyone_dying() is still true —
+	# proven at the sim level here; main.gd's own use of it is a one-line
+	# `and not sim.anyone_dying()` guard, not independently re-tested.
+	var s3 := _sim(2)
+	s3.kill(s3.players[0], 1)
+	t.eq(s3.living_players(), 1, "the kill already ended the round")
+	t.ok(s3.anyone_dying(),
+		"but the death animation the player is watching has not finished")
 
 	# Neither state counts as standing, so the round ended when it should have
 	# and does not un-end when the body is taken away.

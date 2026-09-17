@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-09-17 — six more from a live session (D29)
+
+Real bugs found while the port was actively being played, fixed and
+verified per `docs/BUGS.md` D29:
+
+- **Death animation could get cut off by the round ending underneath it.**
+  The round-transition timer (60 ticks) was shorter than the longest death
+  animation needs (up to 93 steps), and `_check_round_over()` dropped a
+  dying player from the standing count the instant they died — so a
+  cornered, round-deciding death (exactly "no way to avoid it") could tear
+  the `Sim` down for the next round before the animation finished playing,
+  which read as no animation at all. Fixed: a new `Sim.anyone_dying()`
+  gates both round-transition points in `main.gd` until every corpse's
+  animation window has actually elapsed.
+
+- **Flame top-centre alignment, actually fixed this time.** Root cause
+  (Q10) was a genuine 0.5px quantization limit from centring a 41px sprite
+  in a 40px cell — not fixable by choosing a different rounding rule.
+  Fixed properly: flame pieces now draw at their true fractional pixel
+  position (`_draw_frame`'s new `snap` parameter, off for flame pieces
+  only — every other sprite stays pixel-locked, unaffected).
+- **A powerup sitting on a bomb's own tile (the epicentre) was never
+  destroyed** — `_propagate()`'s arm loop starts one cell out and never
+  checked the bomb's own cell. Fixed; new regression test in
+  `tests/test_bomb.gd`.
+- **Bombs could land on top of each other.** A punched or thrown bomb's
+  destination was clamped to field bounds only, with no occupancy check —
+  a kicked (rolling) bomb already stopped correctly against another bomb,
+  but a flying one could land directly on one. Fixed with a new
+  `_landing_cell()` that walks the throw/punch path to the furthest open
+  cell, mirroring how a kicked bomb already stops short. New test in
+  `tests/test_abilities.gd`.
+- **AI movement was genuinely erratic** — the wander fallback re-rolled a
+  random direction every single tick (20/s) with zero persistence. Fixed
+  to hold a direction and only reconsider 1-in-25 ticks, matching the
+  original's own documented rule. Measured: 75% of ticks changed direction
+  before the fix, 5% after.
+- Two reports turned out correct as-is: an exposed powerup on open ground
+  already was destroyed by flame (confirmed, unchanged); a "player instead
+  of bomb" sighting during a punch/throw turned out to be the disc's own
+  intended art (`PUNBOMB4.ANI`) — every character in this game is
+  bomb-shaped, including a flying bomb.
+
 ## 2026-09-17 — project icon, GitHub topics, doc fix, flame Q10
 
 - **Project icon**: `godot-project/project.godot` now points `config/icon`
