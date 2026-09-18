@@ -412,6 +412,15 @@ func tick() -> void:
 
 	for p in players:
 		if p.alive and not p.dying:
+			# POOPS: "places bombs constantly, whether you want to or not"
+			# (types.gd's own comment on the enum). fpc_atomic's `dEbola` —
+			# its own name for this disease, cross-referenced in docs/BUGS.md
+			# Q1 — forces `Action := aaFirst` every tick regardless of the
+			# player's real input, unconditionally overwriting it; matched
+			# here rather than only firing when the player did nothing, since
+			# that override is the one piece of ground truth this has.
+			if p.has_disease(Types_.Disease.POOPS):
+				p.action = Types_.Action.FIRST
 			_player_action(p)
 
 	# Collection happens after movement: stepping onto a powerup this tick
@@ -995,6 +1004,15 @@ func kill(p: Player_, by: int = -1) -> void:
 	if killer >= 0 and killer < round_kills.size():
 		# Your own bomb costs you one. OPTIONS.BM says so in as many words.
 		round_kills[killer] += -1 if killer == p.slot else 1
+	# VALUELST 1300, "250 for killing an AI" (docs/AUDIT.md) — round_score
+	# exists for campaign mode alone (see its own declaration above) and
+	# _kill_creature() already reads 1310/1320 for a rover/ghost; this is
+	# 1300's own case, a bot PLAYER rather than a creature. Not a suicide —
+	# the same exclusion round_kills already makes two lines up — and not
+	# outside a campaign, where round_score is never read at all.
+	if killer >= 0 and killer != p.slot and killer < round_score.size() \
+			and is_bot(p.slot) and not creatures.is_empty():
+		round_score[killer] += Values_.V[Const_.Res.SCORE_AI]
 	p.killed_by = -1 if by == Field_.NO_OWNER else by
 	p.move = Types_.MoveState.STILL
 	p.action = Types_.Action.NONE
@@ -1997,8 +2015,37 @@ func catch_disease(p: Player_, disease: int) -> bool:
 	elif disease == Types_.Disease.CRACK or disease == Types_.Disease.CRACK_POOPS:
 		p.speed_before_slow = p.speed
 		p.speed += Values_.V[Const_.Res.SKATE_BONUS]
+	elif disease == Types_.Disease.SWAP_PLAYERS:
+		# One-shot on infection, not a state that lasts the disease's own
+		# duration — `types.gd`'s own comment on the enum says "swaps places
+		# with another player", not "keeps swapping". The duration slot still
+		# counts down like any other disease (VALUELST gives it one, and
+		# passing it on by contact still needs `has_disease()` to read true
+		# for a while), it just has nothing further to DO once it has fired.
+		_swap_places(p)
 	_play(p.slot, Types_.SoundEffect.DISEASE_CAUGHT, disease)
 	return true
+
+
+## SWAP_PLAYERS' effect: trade tile positions with another random LIVE
+## player. No resource or disassembly pins the mechanic beyond the enum's own
+## "swaps places with another player" — fpc_atomic's unfinished
+## `dSwitchBomberman` ("not stored, because it's never taken back") agrees
+## this is a one-shot rather than a lasting state, which is the one point of
+## corroboration; the swap itself (positions, not control) is this port's
+## own reading of "swap 2 players", the disc's own name for it.
+func _swap_places(p: Player_) -> void:
+	var others: Array[Player_] = []
+	for other in players:
+		if other != p and other.in_play and other.alive and not other.dying:
+			others.append(other)
+	if others.is_empty():
+		return
+	var other: Player_ = others[rng.randi_range(0, others.size() - 1)]
+	var p_tile := Vector2i(p.tile_x(), p.tile_y())
+	var other_tile := Vector2i(other.tile_x(), other.tile_y())
+	p.place_at_tile_centre(other_tile.x, other_tile.y)
+	other.place_at_tile_centre(p_tile.x, p_tile.y)
 
 
 ## How long a disease lasts, in ticks.
@@ -2026,6 +2073,15 @@ func _end_disease(p: Player_, disease: int) -> void:
 		p.speed = p.speed_before_slow
 
 
+## No resource or disassembly gives LEPROSY's drop rate — types.gd's own
+## comment on the enum is the only thing that says what it does at all
+## ("powerups fall off as you walk"), and it names no number. This port's
+## own guess, the same way the closing wall's ticks-per-cell is a flagged
+## guess a few functions over: about one drop every four seconds of walking
+## at 20 Hz, which is often enough to matter and rare enough not to strip a
+## player bare in one lap of the field.
+const LEPROSY_DROP_CHANCE := 80
+
 func _tick_diseases() -> void:
 	if Values_.V[Const_.Res.DISEASE_TIME_LIMITED] == 0:
 		return
@@ -2033,12 +2089,32 @@ func _tick_diseases() -> void:
 		if not p.alive:
 			continue
 		p.disease_freshness += 1
+		if p.has_disease(Types_.Disease.LEPROSY) and p.move != Types_.MoveState.STILL \
+				and rng.randi_range(1, LEPROSY_DROP_CHANCE) == 1:
+			_leprosy_drop(p)
 		for d in Types_.DISEASE_COUNT:
 			if p.disease_ticks[d] <= 0:
 				continue
 			p.disease_ticks[d] -= 1
 			if p.disease_ticks[d] == 0:
 				_end_disease(p, d)
+
+
+## One powerup falls off, onto the field, the way a punch to the head scatters
+## one — same call, same "not diseases, they don't recycle" exclusion.
+func _leprosy_drop(p: Player_) -> void:
+	var held: Array[int] = []
+	for which in Const_.POWERUP_COUNT:
+		if which == Types_.PowerUp.DISEASE or which == Types_.PowerUp.SUPER_BAD_DISEASE:
+			continue
+		if p.collected[which] > 0:
+			held.append(which)
+	if held.is_empty():
+		return
+	var which: int = held[rng.randi_range(0, held.size() - 1)]
+	p.collected[which] -= 1
+	field.scatter_powerup(which, rng)
+	recompute_powers(p)
 
 
 ## Pass a disease on by contact. Whether it MULTIPLIES or hands off is

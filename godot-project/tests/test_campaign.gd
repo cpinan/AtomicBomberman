@@ -33,6 +33,7 @@ func _init() -> void:
 	_test_a_ghost_walks_through_walls(t)
 	_test_contact_kills(t)
 	_test_flame_kills_and_scores(t)
+	_test_killing_a_bot_scores_in_campaign(t)
 	_test_sequence_names(t)
 	_test_the_stage_rule(t)
 	quit(t.finish())
@@ -206,6 +207,38 @@ func _test_flame_kills_and_scores(t: T_) -> void:
 		rover_sim.tick()
 	t.eq(rover_sim.round_score[r.slot], Values_.V[Const_.Res.SCORE_ROVER],
 		"a rover is worth 1310's 15 instead")
+
+
+## VALUELST 1300, "250 for killing an AI" — the third of the three campaign
+## scoring resources, and the only one that scores a PLAYER kill rather than
+## a creature. round_score exists for campaign mode alone (sim.gd's own
+## declaration), so it needs a creature on the field to say so — a plain
+## multiplayer round must not pay it out, and a bot must not pay itself for
+## dying by its own hand either.
+func _test_killing_a_bot_scores_in_campaign(t: T_) -> void:
+	var sim := _open_sim(2)
+	sim.add_bot(1)
+	# A creature on the field is this sim's own signal that a round is a
+	# campaign one — see the comment on `round_score`.
+	sim.add_creature(Creature_.Kind.GHOST, 14, 10, 0)
+	sim.players[0].place_at_tile_centre(5, 5)
+	sim.kill(sim.players[1], 0)
+	t.eq(sim.round_score[0], Values_.V[Const_.Res.SCORE_AI],
+		"killing a bot in campaign mode scores 1300's 250")
+
+	# The same kill, with no creature on the field: not campaign mode, and
+	# round_score is never read outside it.
+	var mp := _open_sim(2)
+	mp.add_bot(1)
+	mp.kill(mp.players[1], 0)
+	t.eq(mp.round_score[0], 0, "no creature on the field, no AI score")
+
+	# A bot dying to its own bomb does not score itself.
+	var suicide := _open_sim(2)
+	suicide.add_bot(1)
+	suicide.add_creature(Creature_.Kind.GHOST, 14, 10, 0)
+	suicide.kill(suicide.players[1], 1)
+	t.eq(suicide.round_score[1], 0, "a bot's own death is not its own kill")
 
 
 # The names are the binary's own format strings, "rover %s" and "ghost %s",

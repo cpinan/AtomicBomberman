@@ -29,6 +29,10 @@ func _init() -> void:
 	_test_trigger(t)
 	_test_bomb_diseases(t)
 	_test_controls_reversed(t)
+	_test_poops(t)
+	_test_swap_players(t)
+	_test_leprosy(t)
+	_test_invisible(t)
 	_test_determinism(t)
 	_test_the_button_does_the_other_thing(t)
 	_test_action_two_stops_a_kicked_bomb(t)
@@ -446,6 +450,97 @@ func _test_controls_reversed(t: T_) -> void:
 	s2.tick()
 	t.ok(p2.x < start2, "with controls reversed RIGHT moves left")
 	t.eq(p2.facing, Types_.Dir.LEFT, "and the player faces left")
+
+
+func _test_poops(t: T_) -> void:
+	# POOPS forces Action.FIRST every tick, fpc_atomic's dEbola cross-
+	# reference (docs/BUGS.md Q1) — the player drops a bomb whenever one is
+	# available, whatever their own input said.
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	p.place_at_tile_centre(5, 5)
+	sim.catch_disease(p, Types_.Disease.POOPS)
+	t.eq(sim.bombs.size(), 0, "no bomb yet")
+	sim.set_input(0, Types_.MoveState.STILL, Types_.Action.NONE)
+	sim.tick()
+	t.eq(sim.bombs.size(), 1, "a bomb appears with no input at all")
+
+
+func _test_swap_players(t: T_) -> void:
+	var sim := _sim(2)
+	var p0: Player_ = sim.players[0]
+	var p1: Player_ = sim.players[1]
+	p0.place_at_tile_centre(2, 2)
+	p1.place_at_tile_centre(9, 8)
+	sim.catch_disease(p0, Types_.Disease.SWAP_PLAYERS)
+	t.eq(p0.tile_x(), 9, "the catcher lands where the other player was")
+	t.eq(p0.tile_y(), 8, "")
+	t.eq(p1.tile_x(), 2, "and the other player lands where the catcher was")
+	t.eq(p1.tile_y(), 2, "")
+
+	# One-shot: catching it again a moment later does not re-swap on its own,
+	# only another catch_disease() call would (has_disease() already refuses
+	# a second infection while the first is still running, which _swap_places
+	# is never asked to run a second time for).
+	var before0 := Vector2i(p0.tile_x(), p0.tile_y())
+	sim.tick()
+	t.eq(p0.tile_x(), before0.x, "no further movement from the disease itself")
+	t.eq(p0.tile_y(), before0.y, "")
+
+
+func _test_leprosy(t: T_) -> void:
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	p.place_at_tile_centre(5, 5)
+	sim.give_powerup(p, Types_.PowerUp.BOMB)
+	sim.give_powerup(p, Types_.PowerUp.FLAME)
+	sim.catch_disease(p, Types_.Disease.LEPROSY)
+	t.ok(p.collected[Types_.PowerUp.BOMB] > 0
+		or p.collected[Types_.PowerUp.FLAME] > 0, "holding something to lose")
+
+	var dropped := false
+	for _i in 400:
+		p.move = Types_.MoveState.RIGHT
+		sim.tick()
+		# Walking off the field edge would end the test early; keep it on one
+		# cell by re-centring every few ticks instead of letting it wander.
+		if p.tile_x() != 5:
+			p.place_at_tile_centre(5, 5)
+		if p.collected[Types_.PowerUp.BOMB] == 0 \
+				and p.collected[Types_.PowerUp.FLAME] == 0:
+			dropped = true
+			break
+	t.ok(dropped, "leprosy eventually drops a held powerup while walking")
+
+	var s2 := _sim(1)
+	var p2: Player_ = s2.players[0]
+	p2.place_at_tile_centre(5, 5)
+	s2.give_powerup(p2, Types_.PowerUp.BOMB)
+	s2.catch_disease(p2, Types_.Disease.LEPROSY)
+	var before := p2.collected[Types_.PowerUp.BOMB]
+	for _i in 100:
+		p2.move = Types_.MoveState.STILL
+		s2.tick()
+	t.eq(p2.collected[Types_.PowerUp.BOMB], before,
+		"standing still, nothing falls off")
+
+
+func _test_invisible(t: T_) -> void:
+	# INVISIBLE lives at the view layer (game_view.gd's local_slots +
+	# draw_player_of), not the sim — the sim has no notion of "whose screen
+	# this is", and no render test covers the view's own skip yet. What a
+	# headless test CAN assert is what the sim promises stays true
+	# regardless: the disease changes nothing about simulation state, only
+	# what a matching viewer draws.
+	var sim := _sim(2)
+	var p0: Player_ = sim.players[0]
+	p0.place_at_tile_centre(5, 5)
+	t.ok(sim.catch_disease(p0, Types_.Disease.INVISIBLE), "caught it")
+	t.eq(p0.alive, true, "invisibility does not change simulation state")
+	t.eq(p0.tile_x(), 5, "the player is still fully present for collision")
+	p0.move = Types_.MoveState.RIGHT
+	sim.tick()
+	t.ok(p0.x > 5 * 4000, "and still moves normally")
 
 
 # [invariant] Every ability must stay reproducible from a seed, or the netcode

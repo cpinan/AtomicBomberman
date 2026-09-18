@@ -50,6 +50,14 @@ const EDITOR_POWERUP_NAMES := ["bomb", "flame", "disease", "kick", "skate",
 	"punch", "grab", "spooge", "goldflame", "trigger", "jelly",
 	"super bad disease", "random"]
 
+## Which slots THIS viewer actually controls — populated by main.gd from its
+## own keyset/pad slot lists, the same for local, host and join (a joining
+## client still drives its own keyset locally and sends the result to the
+## server). Only this list, not the sim, can say "you" — the INVISIBLE
+## disease's own comment is "you cannot see yourself", not "nobody can see
+## you", so it has to be judged per viewer rather than per player.
+var local_slots: Array[int] = []
+
 ## How long the HURRY banner stays up, in wall steps. hurry_index counts the
 ## cells the closing wall has filled, and one is filled every 8 ticks, so 6 is
 ## about two and a half seconds of flashing.
@@ -835,6 +843,15 @@ func draw_shadows_on(on: CanvasItem) -> void:
 func draw_player_of(on: CanvasItem, slot: int) -> void:
 	for p in sim.players:
 		if not p.alive or p.slot != slot:
+			continue
+		# INVISIBLE: "you cannot see yourself" (types.gd), not "nobody can see
+		# you" — only a viewer who is actually driving this slot loses the
+		# sprite; every other player's own draw call for this slot is
+		# untouched. Still shown while dying, same reasoning D28's dying-input
+		# guard used: the feedback that you died matters more than the
+		# disease's own rule holding to the last frame.
+		if not p.dying and p.slot in local_slots \
+				and p.has_disease(Types_.Disease.INVISIBLE):
 			continue
 		var pos := _player_pos(p)
 		# DYING: one of the disc's own 24 death animations, played once from

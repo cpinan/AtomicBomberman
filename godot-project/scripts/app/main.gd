@@ -655,6 +655,7 @@ func _start_from_args(args: Dictionary, ready_scheme: Scheme_ = null) -> void:
 				view.sim = sim
 				view.pack = pack
 				view.level = level
+				view.local_slots = _key_slots + _pad_slots
 				view.show_grid = args.has("debug-grid")
 				add_child(view)
 			return
@@ -695,6 +696,7 @@ func _start_from_args(args: Dictionary, ready_scheme: Scheme_ = null) -> void:
 		view.sim = sim
 		view.pack = pack
 		view.level = level
+		view.local_slots = _key_slots + _pad_slots
 		view.show_grid = args.has("debug-grid")
 		view.the_match = the_match if the_match != null else (
 			client.the_match if client != null else null)

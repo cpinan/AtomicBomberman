@@ -59,6 +59,38 @@ also where fpc_atomic put its `dEbola`. A guess, flagged as one.
 
 **Would settle it:** `DISEASE.H`, or `BM.EXE`.
 
+**IMPLEMENTED 2026-09-17.** Four of the twelve had been classified into the
+right pool since the names were answered but never given an actual effect —
+`sim.gd`'s `catch_disease()`/`_tick_diseases()` now cover all twelve:
+
+- **POOPS** forces `Action.FIRST` every tick regardless of the player's own
+  input. Sourced, not guessed: fpc_atomic's `dEbola` — its own name for this
+  disease, per the five-name cross-check above — does exactly this
+  unconditionally in its own tick loop, and `dEbola`'s German comment
+  ("die Pupserkrankheit") is bathroom humour matching "poops" directly.
+- **SWAP_PLAYERS** trades tile positions with a random other live player,
+  once, on infection (`_swap_places()`). One-shot rather than a lasting
+  state is corroborated by fpc_atomic's own unfinished `dSwitchBomberman`
+  ("not stored, because it is never taken back") — but which of "positions
+  swap" or "control swaps" is meant is this port's own reading of the disc's
+  name, "swap 2 players"; fpc_atomic never finished its version either way.
+- **LEPROSY** drops one held powerup onto the field per `types.gd`'s own
+  enum comment, "powerups fall off as you walk" — that comment predates this
+  fix and is the only source for the mechanic at all; the drop RATE
+  (`LEPROSY_DROP_CHANCE`, `sim.gd`) has no resource behind it and is flagged
+  as this port's own number, the same way the closing wall's ticks-per-cell
+  is.
+- **INVISIBLE** hides a player's own sprite from a viewer who is actually
+  driving that slot (`game_view.gd`'s `local_slots` + `draw_player_of`) —
+  "you cannot see yourself", not "nobody can see you", per the enum comment.
+  Does not touch simulation state; every other player still sees and
+  collides with them normally.
+
+All four are judgment calls beyond what fpc_atomic's cross-reference or the
+enum's own pre-existing comments state — flagged as such at the point each
+is implemented, the same convention as `SUPER_BAD_DISEASES`' own pool
+assignment above.
+
 ### Q2 — Two active players on one start cell
 **Status:** ASSUMED and implemented, 2026-09-02. Players overlap freely.
 
