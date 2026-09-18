@@ -94,10 +94,13 @@ Nothing here is invented where the disc has an answer. The pipeline:
 ## This session's work
 
 Starting from a build that already played start-to-finish with ~6,100
-green checks, a live playtesting pass turned up defects the test suite
+green checks, a live playtesting pass — followed by a deliberate
+port-vs-original ground-truth hunt — turned up defects the test suite
 could not see (the recurring lesson of this whole project — see
-`docs/BUGS.md`'s D21/D24/D27/D28, and now the entries below). All fixed and
-re-verified against the full suite:
+`docs/BUGS.md`'s D21/D24/D27/D28, and now D29). All fixed and re-verified
+against the full suite:
+
+**Found by playing it (D29):**
 
 - **Bombs sometimes not destroying bricks.** The flame-arm walk tested "is
   there a powerup here" before "is this a brick" — and every powerup sits
@@ -105,28 +108,53 @@ re-verified against the full suite:
   invisible powerup and stopped without ever touching the brick. Swept all
   67 schemes: **1,540 of 4,268 bomb-adjacent-to-brick cases (36%) failed
   before the fix, 0 after.**
-- **Flame centre/north-arm misalignment**, down to the actual cause: Godot's
-  `round()` breaks a `.5` tie away from zero, and the centre flame piece's
-  centring offset was negative while the north arm's was positive — the
-  same formula, opposite sides of the tie, landing a full pixel apart.
-- **A second flame sprite gap** (the east tip piece was undersized relative
-  to its cell) and **SFX going completely silent after the first round**
-  (a voice-busy tracker compared against an absolute tick count that resets
-  every round) — both root-caused to the exact line, not patched around.
-- **A glove-throw rendering the player sprite over the bomb** instead of the
-  bomb itself, from a pickup-animation flag never cleared on throw.
-- **AI fidelity gaps against the disassembled original**: the bot had no
-  remote-trigger or bomb-kick behaviour at all, and its "bomb a nearby
-  enemy" rule used a different shape and no probability roll than the
-  original's fixed 5-cell plus-shape 1-in-5 check. Both added/corrected and
-  cross-checked against `BM95.EXE`'s own code.
+- **Flame centre/north-arm misalignment** — a genuine sub-pixel quantization
+  limit (a 41px sprite centred in a 40px cell always leaves an exact 0.5px
+  remainder, provably, for any rounding rule), fixed by letting flame
+  pieces draw at their true fractional pixel position instead of snapping —
+  every other sprite kind stays pixel-locked.
+- **A powerup sitting on a bomb's own tile was never destroyed** — the
+  flame arms checked for one, the epicentre never did.
+- **Bombs could land on top of each other.** A punched or thrown bomb's
+  destination was clamped to field bounds only, with zero occupancy
+  check — fixed to stop at the furthest open cell, the way a kicked bomb
+  already did.
+- **AI movement was genuinely erratic** — the wander fallback re-rolled a
+  random direction every single tick (20/s) instead of persisting one.
+  Measured: 75% of ticks changed direction before the fix, 5% after,
+  matching the original's own 1-in-25 reconsider rule.
+- **A death animation could get cut off by the round ending underneath
+  it** — the round-transition timer (60 ticks) was shorter than the
+  longest death animation needs (up to 93 steps), so a cornered,
+  round-deciding kill could tear the simulation down mid-animation.
+
+**Found by hunting the port against the disassembled original, not by
+playing:**
+
+- **Four of twelve diseases were dead stubs** — `POOPS`, `SWAP_PLAYERS`,
+  `LEPROSY` and `INVISIBLE` were correctly classified into the disease
+  pool (so a player could catch them) but had no effect at all.
+  Implemented, cross-checked against an independent prior port where the
+  disc itself doesn't say (POOPS confirmed via a second port's own
+  `dEbola` — same disease, same mechanism).
+- **Campaign mode never scored a kill on a bot player** — VALUELST
+  resource 1300 ("250 for killing an AI") was declared and never read.
+- **The project's own "two-parser" safety check wasn't running.**
+  `tools/schemes.py --compare` — meant to catch the Python and GDScript
+  scheme parsers disagreeing — depended on a test-support script that
+  didn't exist, so it passed by checking nothing. Rebuilt; run for real:
+  all 67 schemes agree between the two parsers.
+
+Two live reports turned out to be correct behaviour, not bugs: an exposed
+powerup already died to flame (only the epicentre case was broken), and a
+"player instead of bomb" sighting during a punch/throw was the disc's own
+art — every character in this game is bomb-shaped, including a flying bomb.
 
 Every fix above was found and root-caused through actual repro — headless
 simulation sweeps across all 67 schemes, live-session playtesting, and
 pixel-level measurement of the rendered art — not by reasoning about the
-code in the abstract. See `docs/BUGS.md` for the full defect history
-(28 previously-documented defects, D1–D28) and `CHANGELOG.md` for the
-itemized diff.
+code in the abstract. See `docs/BUGS.md` D29 for the full defect history
+and `CHANGELOG.md` for the itemized diff.
 
 ## What's not done
 
