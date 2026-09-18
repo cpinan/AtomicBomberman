@@ -36,6 +36,7 @@ func _init() -> void:
 	_test_a_bot_triggers_its_own_bomb(t)
 	_test_a_bot_kicks_an_adjacent_bomb(t)
 	_test_the_enemy_bomb_rule_matches_the_original_shape(t)
+	_test_a_bot_hunts_a_nearby_enemy(t)
 	quit(t.finish())
 
 
@@ -584,7 +585,10 @@ func _test_the_enemy_bomb_rule_matches_the_original_shape(t: T_) -> void:
 	t.ok(not ai._own_bomb_too_close(clear, p4, Vector2i(5, 5)),
 		"and with no bomb of its own at all, the gate is open")
 
-	# The 1-in-5 throttle, measured the same way as the other two rolls.
+	# The throttle, measured the same way as the other two rolls. Reads
+	# Ai_.ENGAGE_CHANCE_DENOM rather than a hardcoded rate — that constant is
+	# a deliberate gameplay number (see ai.gd's "GAMEPLAY AGGRESSION" block),
+	# not a fidelity read, and this test should track it, not fight it.
 	var fired := 0
 	var trials := 400
 	for seed_value in trials:
@@ -598,9 +602,43 @@ func _test_the_enemy_bomb_rule_matches_the_original_shape(t: T_) -> void:
 		var choice := Ai_.new().think(sim, bot)
 		if int(choice["action"]) == Types_.Action.FIRST:
 			fired += 1
-	t.close(float(fired) / trials, 0.2, 0.07,
-		"an adjacent enemy is bombed about 1 time in 5 (%d/%d)"
-			% [fired, trials])
+	var expect := 1.0 / float(Ai_.ENGAGE_CHANCE_DENOM)
+	t.close(float(fired) / trials, expect, 0.07,
+		"an adjacent enemy is bombed about 1 time in %d (%d/%d)"
+			% [Ai_.ENGAGE_CHANCE_DENOM, fired, trials])
+
+
+## Step 6's own addition (ai.gd's "GAMEPLAY AGGRESSION" block): a bot with
+## nothing safer to do closes the distance on a nearby enemy instead of
+## drifting on the random wander. Not the original's behaviour — the
+## original's step 6 only ever sought a brick — so this asserts the port's
+## own chosen shape, not a disassembly read.
+func _test_a_bot_hunts_a_nearby_enemy(t: T_) -> void:
+	var sim := _open_sim(2)
+	var bot: Player_ = sim.players[0]
+	bot.place_at_tile_centre(2, 5)
+	var enemy: Player_ = sim.players[1]
+	enemy.place_at_tile_centre(6, 5)          # 4 cells away, inside HUNT_RADIUS
+	var choice := Ai_.new().think(sim, bot)
+	t.eq(int(choice["move"]), Types_.MoveState.RIGHT,
+		"an enemy 4 cells off, with nothing else to do, pulls the bot toward it")
+
+	# Far outside HUNT_RADIUS: no pull, falls through to the plain wander.
+	var far := _open_sim(2)
+	var bot2: Player_ = far.players[0]
+	bot2.place_at_tile_centre(1, 1)
+	var enemy2: Player_ = far.players[1]
+	enemy2.place_at_tile_centre(13, 9)          # far past HUNT_RADIUS
+	var goal := Ai_.new()._nearest_enemy_cell(far, bot2,
+		Ai_.new()._walk_distances(far, Vector2i(1, 1)),
+		Ai_.new()._danger_map(far))
+	# The enemy is still the nearest (only) one _nearest_enemy_cell finds —
+	# think() is what applies the HUNT_RADIUS cutoff on top of that, so this
+	# checks the cutoff directly rather than inferring it from a move.
+	t.ok(goal.x >= 0, "the enemy is still found as a candidate")
+	var dist: PackedInt32Array = Ai_.new()._walk_distances(far, Vector2i(1, 1))
+	t.ok(dist[Field_.idx(goal.x, goal.y)] > Ai_.HUNT_RADIUS,
+		"but it is farther than HUNT_RADIUS, so think() will not chase it")
 
 
 ## An empty field — no bricks, no solids inside the border — for assertions

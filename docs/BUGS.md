@@ -904,6 +904,27 @@ what is left is the data they act on.
    `0x4245DA` (live-bomb count), `0x421CB5` (object at a cell), `0x423188`
    (may a bomb be dropped here) and `0x422718`.
 
+**Gameplay aggression, 2026-09-17 — a deliberate departure, not a fidelity
+read.** Read exactly as disassembled, step 4 fires 1-in-5 and step 6 only
+ever sought a brick — nothing in the original's own 8 handlers ever chases
+an enemy. Faithful, and also passive: a human playing against it reported
+"it walks a lot without looking to fight." `ai.gd`'s "GAMEPLAY AGGRESSION"
+block (top of the file) is the fix, and it says outright that it is not a
+second disassembly read:
+
+- `ENGAGE_CHANCE_DENOM` replaces step 4's 1-in-5 with 1-in-2.
+- Step 6 gained a first half, `_nearest_enemy_cell()` — close on the nearest
+  live enemy within `HUNT_RADIUS` (6 cells) before falling back to the
+  brick-seeking the original actually has. A bot with nothing safer to do
+  now walks toward a fight instead of wandering.
+
+Both numbers are gameplay tuning, kept in one named block precisely so a
+later pass that wants to dial them back toward the original's own 1-in-5
+and no-chase-at-all knows exactly what to touch and why it's there.
+`tests/test_bots.gd`'s throttle assertion reads `Ai_.ENGAGE_CHANCE_DENOM`
+rather than a hardcoded rate, so it tracks the constant rather than fighting
+it if it moves again.
+
 ---
 
 ## 2. Defects

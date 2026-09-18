@@ -33,11 +33,17 @@
 #      cell. Nothing else matters while a bomb is ticking under you.
 #   3  If a powerup is within resource 920's radius and reachable safely, take
 #      it.
-#   4  If an enemy is reachable and bombing here leaves an escape, bomb —
-#      1-in-5, and only if no live bomb of your own already covers the spot.
+#   4  If an enemy is reachable and bombing here leaves an escape, bomb — a
+#      throttled chance, and only if no live bomb of your own already covers
+#      the spot. The chance is a deliberate gameplay number now, not the
+#      original's read 1-in-5 — see "GAMEPLAY AGGRESSION" below.
 #   5  If a destructible brick is adjacent and there is an escape, bomb it —
 #      1-in-resource-915 of the time, so bots do not all dig identically.
-#   6  Otherwise walk toward the nearest thing worth reaching.
+#   6  Otherwise close the distance on the nearest enemy within hunting
+#      range, or failing that walk toward the nearest brick worth reaching.
+#      The enemy half is this port's own addition — see "GAMEPLAY
+#      AGGRESSION" below — the original's own step 6 only ever sought a
+#      brick.
 #
 # Steps 0, 1 and 4 were added later than the rest, once BM95.EXE's own
 # priority table (0x45BA78) had been read in full — docs/BUGS.md Q5.4. Two of
@@ -77,6 +83,24 @@ const STEPS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0),
 
 ## A cell already on fire: nothing is sooner than now.
 const BURNING_NOW := 1
+
+# ---------------------------------------------------------------------------
+# GAMEPLAY AGGRESSION — not a fidelity read, said outright
+# ---------------------------------------------------------------------------
+# The original's own step 4 throttle is 1-in-5, exactly as disassembled, and
+# step 6 never sought an enemy at all — its only goal was the nearest brick.
+# Left as read, a bot spends almost the whole round digging, and only fights
+# when an opponent happens to wander into its 5-cell plus. That's faithful to
+# the binary; it also makes for a passive bot a human finds boring to fight,
+# which a "the AI should be more aggressive" ask is a request to fix on
+# gameplay terms, not on fidelity terms. Two knobs, both new, both gameplay:
+#
+#   ENGAGE_CHANCE_DENOM  step 4's throttle, in place of the original's 1-in-5.
+#   HUNT_RADIUS          how far step 6 will walk to close on an enemy rather
+#                         than dig a brick — the original had no such radius
+#                         because it never chased at all.
+const ENGAGE_CHANCE_DENOM := 2
+const HUNT_RADIUS := 6
 
 
 ## Decide this tick's input for one player. Returns
@@ -197,11 +221,13 @@ func think(sim: RefCounted, p: Player_) -> Dictionary:
 	#               than a read of that function (docs/BUGS.md Q5.4's own
 	#               note on why: it prevents a bot bombing itself into a
 	#               corner, D-class behaviour no oracle constant covers).
-	#   throttle    1-in-5, last, exactly as read.
+	#   throttle    1-in-5 is what BM95.EXE does. `ENGAGE_CHANCE_DENOM` is a
+	#               deliberate gameplay override of that number — see the
+	#               "GAMEPLAY AGGRESSION" block above — not a second read.
 	if p.bombs_available > 0 and not _own_bomb_too_close(sim, p, here) \
 			and _enemy_near(sim, p, here) \
 			and _escape_exists(sim, p, here, danger) \
-			and sim.rng.randi_range(1, 5) == 1:
+			and sim.rng.randi_range(1, ENGAGE_CHANCE_DENOM) == 1:
 		return {"move": Types_.MoveState.STILL, "action": Types_.Action.FIRST}
 
 	# 5. A brick to blast. Resource 915 makes it 1-in-5, so a field of bots
@@ -211,7 +237,23 @@ func think(sim: RefCounted, p: Player_) -> Dictionary:
 			and sim.rng.randi_range(1, Values_.V[Const_.Res.AI_BLAST_BRICKS_CHANCE]) == 1:
 		return {"move": Types_.MoveState.STILL, "action": Types_.Action.FIRST}
 
-	# 6. Head for the nearest brick worth blasting, or an enemy.
+	# 6. Head for the nearest brick worth blasting, or close on an enemy.
+	#
+	# The original never had this second half: its own step 6 walks toward a
+	# brick and nothing else, because none of its 8 handlers ever chase — see
+	# the "GAMEPLAY AGGRESSION" block at the top of this file. Without it, a
+	# bot with no brick nearby and no enemy already adjacent just wanders
+	# (step 7, `_any_open_move`), which is the "walks a lot without looking
+	# to fight" a human sees. `_nearest_enemy_cell` finds the closest live
+	# opponent within `HUNT_RADIUS` and this walks toward THEM, so a bot with
+	# nothing better to do closes the distance instead of drifting — step 4
+	# then takes over and fights once they're adjacent, at the usual throttle.
+	var enemy_goal := _nearest_enemy_cell(sim, p, safe_dist, danger)
+	if enemy_goal.x >= 0 and enemy_goal != here \
+			and safe_dist[Field_.idx(enemy_goal.x, enemy_goal.y)] <= HUNT_RADIUS:
+		return {"move": _step_toward(safe_dist, here, enemy_goal),
+			"action": Types_.Action.NONE}
+
 	var goal := _nearest(safe_dist, danger, func(c: Vector2i) -> bool:
 		return _brick_adjacent(sim, c))
 	if goal.x >= 0 and goal != here:
@@ -411,6 +453,34 @@ func _step_toward(dist: PackedInt32Array, here: Vector2i,
 	if delta.y < 0:
 		return Types_.MoveState.UP
 	return Types_.MoveState.STILL
+
+
+## The closest live enemy's own tile, reachable and not behind fire — or
+## (-1,-1) if there is none. Used only by step 6's hunt; step 4's point-blank
+## check has its own `_enemy_near` and is unaffected by this.
+func _nearest_enemy_cell(sim: RefCounted, me: Player_,
+		safe_dist: PackedInt32Array, danger: PackedByteArray) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var best_d := UNREACHABLE
+	for other in sim.players:
+		if other.slot == me.slot or not other.alive or other.dying:
+			continue
+		if not other.in_play:
+			continue
+		if sim.team_play and other.team == me.team \
+				and me.team != Types_.TEAM_UNSET:
+			continue
+		var c := Vector2i(other.tile_x(), other.tile_y())
+		if not Field_.in_bounds(c.x, c.y):
+			continue
+		var i := Field_.idx(c.x, c.y)
+		if danger[i] != 0:
+			continue
+		if safe_dist[i] >= best_d:
+			continue
+		best_d = safe_dist[i]
+		best = c
+	return best
 
 
 func _brick_adjacent(sim: RefCounted, cell: Vector2i) -> bool:
