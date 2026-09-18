@@ -43,7 +43,8 @@ const Const_ := preload("res://scripts/core/const.gd")
 ## 2 -> 3: C_INPUT carries a fourth byte — whether the FIRST action button is
 ## held down this tick, for hold-to-carry (docs/BUGS.md, Player_.
 ## action_first_held). Snapshot.LAYOUT moves alongside this.
-const VERSION := 3
+## 3 -> 4: S_SLOT_OVERRIDDEN exists — INPUT.BM's host override key.
+const VERSION := 4
 
 # Client -> server
 const C_HELLO := 1        ## name, protocol version
@@ -59,6 +60,7 @@ const S_SOUNDS := 67      ## events raised on the tick just sent
 const S_REJECT := 68      ## why you cannot join
 const S_PAUSE := 69       ## everyone waits; a client is behind
 const S_MATCH := 70       ## the score, and the seed of the round now starting
+const S_SLOT_OVERRIDDEN := 71  ## the host converted a slot to/from AI
 
 # Why a join was refused. fpc_atomic's EC_* codes, minus the ones that belong
 # to its menu flow.
@@ -194,6 +196,20 @@ static func match_state(round_index: int, round_seed: int, level: int,
 	return b
 
 
+## INPUT.BM: "'o' or '0' lets the host override a client's player selection."
+## Broadcast to every peer, not just the affected one, so everybody's own
+## view of the roster (name list, HUD) can reflect who is an AI now — the
+## affected peer's own C_INPUT stops being applied the moment the server's
+## side of this takes effect (see server.gd's C_INPUT handler), whether or
+## not this packet is what tells them so.
+static func slot_overridden(slot: int, now_ai: bool) -> PackedByteArray:
+	var b := PackedByteArray()
+	b.append(S_SLOT_OVERRIDDEN)
+	b.append(slot)
+	b.append(int(now_ai))
+	return b
+
+
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
@@ -284,6 +300,10 @@ static func decode(data: PackedByteArray) -> Dictionary:
 				"champion_slot": int(data[8]) - 1,
 				"champion_team": int(data[9]) - 1,
 				"wins": w, "team_wins": tw}
+		S_SLOT_OVERRIDDEN:
+			if data.size() < 3:
+				return {}
+			return {"id": id, "slot": data[1], "now_ai": data[2] != 0}
 		S_SNAPSHOT:
 			# The body is the simulation's own byte layout; snapshot.gd owns it.
 			if data.size() < 5:

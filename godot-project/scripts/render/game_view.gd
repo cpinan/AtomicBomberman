@@ -868,6 +868,21 @@ func draw_player_of(on: CanvasItem, slot: int) -> void:
 				Color.WHITE, on, true)
 			continue
 
+		# CORNERED: boxed in on all four sides, one of 13 `cornerhead N`
+		# sequences (docs/BUGS.md) — `sim.gd`'s own trigger already refuses to
+		# start this while kicking/punching/picking up, so this check sits
+		# ahead of theirs without needing to repeat that exclusion here.
+		if p.cornerhead > 0:
+			var corner_seq := "cornerhead %d" % (p.cornerhead - 1)
+			if not _cornerhead_sheets.has(corner_seq):
+				_cornerhead_sheets[corner_seq] = pack.sheet_with_sequence(corner_seq)
+			var corner_sheet: String = _cornerhead_sheets[corner_seq]
+			if not corner_sheet.is_empty():
+				_draw_seq_frame(corner_sheet, corner_seq, pos,
+					Sim_.CORNERHEAD_TICKS - p.cornerhead_ticks, true,
+					Color.WHITE, on, true)
+				continue
+
 		# KICKING: KICK.ANI, four directions, held for a few ticks after the
 		# kick. Also never drawn before — a kick looked like walking into a
 		# bomb.
@@ -934,6 +949,9 @@ func _is_carrying(slot: int) -> bool:
 ## sequence name -> sheet, built once. Seventeen sheets is too many to search
 ## per player per frame.
 var _death_sheets: Dictionary = {}
+
+## Same idea, for cornerhead's eight sheets.
+var _cornerhead_sheets: Dictionary = {}
 
 
 ## Draw one frame of a player's death. Returns false when there is nothing to

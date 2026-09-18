@@ -71,6 +71,10 @@ WANTED = {
     "WALK": "player walking, four directions, plus spin",
     "KICK": "player kicking a bomb",
     "SHADOW": "the blob under every actor",
+    # `0x41F29B` (player_update): a player boxed in on all four sides rolls
+    # one of 13 `cornerhead N` sequences and plays it — ANIMS.TXT's own words,
+    # "a character getting trapped, ready to die." docs/BUGS.md.
+    "CORNER": "cornered/trapped reaction, 13 sequences over eight files",
     # --- the three things the action button does, which the port could do and
     # could not show. MANUAL.BM names all of them and the disc animates all of
     # them; the port drew a walking bomberman for each.
@@ -366,6 +370,12 @@ def main(argv: list[str]) -> int:
             # One file per direction, and each names its own sequence, so they
             # travel as four sheets rather than being merged.
             for n in range(1, 5):
+                targets.append((f"{base}{n}", f"{base}{n}.ANI"))
+        elif base == "CORNER":
+            # CORNER0..7, eight files holding 13 `cornerhead N` sequences
+            # between them (docs/BUGS.md Q3) — uneven, unlike PUNBOMB's one
+            # sequence per file, so each travels as its own sheet.
+            for n in range(8):
                 targets.append((f"{base}{n}", f"{base}{n}.ANI"))
         else:
             targets.append((base, f"{base}.ANI"))

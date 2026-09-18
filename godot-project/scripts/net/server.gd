@@ -318,7 +318,13 @@ func _handle(from: int, msg: Dictionary) -> void:
 			seat["last_tick"] = int(msg["tick"])
 			seat["silent_ms"] = 0.0
 			# The input is applied to THEIR seat and no other, whatever the
-			# packet claims.
+			# packet claims — unless the host has overridden that seat to an
+			# AI (override_slot()), in which case the bot's own think() drives
+			# it now and this peer's packets are accepted (so their connection
+			# stays alive and they keep proving they are not silent) but no
+			# longer acted on.
+			if sim.is_bot(int(seat["slot"])):
+				return
 			sim.set_input(int(seat["slot"]), int(msg["move"]),
 				int(msg["action"]), bool(msg.get("first_held", false)))
 		Protocol_.C_HEARTBEAT:
@@ -498,6 +504,85 @@ func add_bot_slots(which: Array) -> void:
 		if not _bots.has(i):
 			_bots.append(i)
 	_note("%d bot slots set" % _bots.size())
+
+
+## INPUT.BM: "'o' or '0' lets the host override a client's player selection."
+##
+## What the ORIGINAL's own shared pre-game lobby let a host do — reassign any
+## seat's type, KEY/AI/JOY/OFF, before the round starts — this port has no
+## screen for: a client here never chooses a type at all (the server just
+## seats it), and there is no lobby a host and already-connected clients both
+## sit in, because listen() starts the round at once. What the architecture
+## DOES support, and what this implements, is the one transition that means
+## anything server-side once play is under way: a HUMAN seat can be demoted
+## to an AI (their connection stays open, `_handle()`'s C_INPUT guard just
+## stops acting on it, and `_ai.think()` takes over next tick), and an AI
+## seat this created can be freed back to OFF for a new human to claim
+## (`_free_slot()` already treats an AI seat as fair game the same way).
+##
+## Returns true if the slot actually changed. A slot with no peer and no bot
+## on it has nothing to override.
+func override_slot(slot: int) -> bool:
+	if slot < 0 or slot >= Const_.PLAYER_COUNT:
+		return false
+	# is_bot() FIRST. A demoted peer's own record in `peers` is left alone —
+	# see the note above on why — so it is still there and would look like
+	# "occupied" to the other branch; checking bot status first is what
+	# makes a second call on the same slot a TOGGLE rather than a no-op that
+	# just re-demotes whoever is still attached.
+	if sim.is_bot(slot):
+		sim.bot_slots.erase(slot)
+		_bots.erase(slot)
+		var occupant := _peer_id_for_slot(slot)
+		if occupant >= 0:
+			# The peer this demoted never disconnected — restoring means
+			# handing their own input back, and _handle()'s C_INPUT guard
+			# already stops ignoring them the instant is_bot(slot) is
+			# false, so there is nothing further to change here.
+			_note("host restored slot %d to %s"
+				% [slot, String(peers[occupant]["name"])])
+		else:
+			# A standalone bot (add_bots()/add_bot_slots()), not a demoted
+			# human — nobody is waiting to reclaim the seat, so it goes back
+			# to OFF, the same as _free_slot() already treats an unclaimed
+			# AI seat as open.
+			var p := sim.player_by_slot(slot)
+			if p != null:
+				p.in_play = false
+				p.alive = false
+			_note("host overrode slot %d back to open" % slot)
+		_broadcast(Protocol_.slot_overridden(slot, false))
+		return true
+	var occupant := _peer_id_for_slot(slot)
+	if occupant >= 0:
+		sim.add_bot(slot)
+		if not _bots.has(slot):
+			_bots.append(slot)
+		_broadcast(Protocol_.slot_overridden(slot, true))
+		_note("host overrode slot %d to AI (was %s)"
+			% [slot, String(peers[occupant]["name"])])
+		return true
+	return false
+
+
+## The host's own key has no roster cursor to point with — see
+## override_slot()'s own note on why no lobby screen exists to put one on —
+## so it walks the slots in order and overrides the first one with anything
+## to override. Returns the slot changed, or -1 if every slot is already
+## empty and not a bot.
+func override_next_slot() -> int:
+	for slot in Const_.PLAYER_COUNT:
+		if _peer_id_for_slot(slot) >= 0 or sim.is_bot(slot):
+			override_slot(slot)
+			return slot
+	return -1
+
+
+func _peer_id_for_slot(slot: int) -> int:
+	for id in peers:
+		if int(peers[id]["slot"]) == slot:
+			return id
+	return -1
 
 
 func _slot_taken(slot: int) -> bool:

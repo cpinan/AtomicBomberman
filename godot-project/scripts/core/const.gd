@@ -232,6 +232,11 @@ class Res:
 	const AI_BLAST_BRICKS_CHANCE := 915 ## 1-in-N
 	const AI_POWERUP_RADIUS := 920
 
+	## How many `cornerhead N` sequences CORNER0-7 hold between them — 13, per
+	## docs/BUGS.md Q3. `0x41F29B` (`player_update`) reads it to pick which one
+	## plays when a player is boxed in on all four sides.
+	const CORNERHEAD_COUNT := 330
+
 
 ## Convert a VALUELST speed — hundredths of a pixel per frame — to pixels per
 ## tick. A tick IS a frame, so this is only a divide by 100.

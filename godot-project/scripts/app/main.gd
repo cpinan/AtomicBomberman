@@ -739,6 +739,7 @@ func _start_from_args(args: Dictionary, ready_scheme: Scheme_ = null) -> void:
 
 	if client != null:
 		client.sound.connect(_on_client_sound)
+		client.slot_overridden.connect(_on_slot_overridden)
 
 	if mode != Mode.DEDICATED:
 		view = GameView.new()
@@ -1506,6 +1507,14 @@ func _on_client_sound(slot: int, effect: int, arg: int) -> void:
 	_heard.append({"slot": slot, "effect": effect, "arg": arg})
 
 
+## Every peer hears this, not only the overridden one — see
+## Protocol_.slot_overridden()'s own comment on why. Printed rather than
+## shown on screen: there is no in-round roster overlay to put it on, the
+## same reason server.gd's override_next_slot() cycles rather than points.
+func _on_slot_overridden(slot: int, now_ai: bool) -> void:
+	print("main: slot %d overridden to %s" % [slot, "AI" if now_ai else "open"])
+
+
 ## A client's round_index/level/seed changed, so its Sim was rebuilt and its
 ## tick count is back at 0. Sfx outlives every round — see Sfx.new_round() —
 ## so the mixer's per-round busy-until bookkeeping has to be told the same
@@ -1671,6 +1680,16 @@ func _input(event: InputEvent) -> void:
 				# knows about itself: mode, tick, level, player count.
 				if pressed.alt_pressed:
 					_print_misc_info()
+			KEY_O, KEY_0:
+				# INPUT.BM: "'o' or '0' lets the host override a client's
+				# player selection." Host-only, and there is no roster
+				# cursor to point it at — server.gd's override_slot()
+				# explains why no lobby screen exists here to put one on —
+				# so it cycles the next occupied-or-AI slot in order.
+				# server.gd broadcasts the change; _on_slot_overridden()
+				# prints it for every peer, this one included.
+				if mode == Mode.HOST and server != null:
+					server.override_next_slot()
 		if view != null and view.editor_active:
 			_editor_key(pressed.keycode)
 	if view != null and view.editor_active and sim != null:

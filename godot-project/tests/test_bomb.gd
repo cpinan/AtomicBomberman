@@ -28,6 +28,7 @@ func _init() -> void:
 	_test_chain(t)
 	_test_death(t)
 	_test_kill_tally(t)
+	_test_cornerhead(t)
 	quit(t.finish())
 
 
@@ -593,3 +594,66 @@ func _test_kill_tally(t: T_) -> void:
 	t.ok(wall.players[0].dying, "an unattributed death still kills")
 	for k in wall.round_kills:
 		t.eq(k, 0, "and puts a kill on nobody's column")
+
+
+## `0x41F29B`: boxed in on all four sides rolls one of the 13 `cornerhead N`
+## sequences. docs/BUGS.md.
+func _test_cornerhead(t: T_) -> void:
+	var lines := PackedStringArray()
+	lines.append("-V,2")
+	lines.append("-N,Boxed")
+	lines.append("-B,0")
+	for y in Const_.FIELD_H:
+		var row := ""
+		for x in Const_.FIELD_W:
+			# A solid ring around (5,5): every one of its four neighbours.
+			var boxed_in := (x == 4 and y == 5) or (x == 6 and y == 5) \
+				or (x == 5 and y == 4) or (x == 5 and y == 6)
+			row += "#" if boxed_in else "."
+		lines.append("-R,%2d,%s" % [y, row])
+	# Start well away from (5,5): a live player's start cell and its four
+	# neighbours are auto-blanked at round setup, which would eat the very
+	# walls this test needs. place_at_tile_centre() below moves the player
+	# into the box afterward.
+	lines.append("-S,0,10,9,0")
+	lines.append("-S,1,1,1,0")
+	for slot in range(2, Const_.PLAYER_COUNT):
+		lines.append("-S,%d,%d,%d,0" % [slot, slot, slot])
+	for i in Const_.POWERUP_COUNT:
+		lines.append("-P,%2d, 0,0, 0, 0,x" % i)
+	var s: Scheme_ = Scheme_.new()
+	s.parse_text("\n".join(lines), "<boxed>")
+	assert(s.ok(), "boxed scheme must parse: %s" % s.error())
+
+	var boxed: Sim_ = Sim_.new()
+	boxed.setup(s, [{"slot": 0, "team": 0}, {"slot": 1, "team": 0}], 1)
+	var p: Player_ = boxed.players[0]
+	p.place_at_tile_centre(5, 5)
+	t.eq(p.cornerhead, 0, "not playing before the check has run")
+	boxed.tick()
+	t.ok(p.cornerhead >= 1 and p.cornerhead <= Values_.V[Const_.Res.CORNERHEAD_COUNT],
+		"boxed in on all four sides rolls a cornerhead sequence in range")
+	t.eq(p.cornerhead_ticks, Sim_.CORNERHEAD_TICKS, "with its full duration")
+
+	var ticks := p.cornerhead_ticks
+	for _i in ticks:
+		boxed.tick()
+	t.eq(p.cornerhead, 0, "and it clears again once its duration elapses")
+
+	# An open field never triggers it.
+	var open := _sim(1)
+	var q: Player_ = open.players[0]
+	q.place_at_tile_centre(5, 5)
+	for _i in 5:
+		open.tick()
+	t.eq(q.cornerhead, 0, "an open field never boxes a player in")
+
+	# Mid-kick, mid-punch or mid-pickup takes priority — the original's own
+	# state field is shared, and this port's own gate mirrors that.
+	var busy := Sim_.new()
+	busy.setup(s, [{"slot": 0, "team": 0}, {"slot": 1, "team": 0}], 1)
+	var r: Player_ = busy.players[0]
+	r.place_at_tile_centre(5, 5)
+	r.kick_ticks = 3
+	busy.tick()
+	t.eq(r.cornerhead, 0, "boxed in but mid-kick: no cornerhead yet")

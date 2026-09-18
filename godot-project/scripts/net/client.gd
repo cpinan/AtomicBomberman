@@ -30,6 +30,7 @@ signal sound(slot: int, effect: int, arg: int)
 ## level's background and specials.
 signal round_started(round_index: int, level: int)
 signal match_finished(champion_slot: int, champion_team: int)
+signal slot_overridden(slot: int, now_ai: bool)
 
 enum State { IDLE, CONNECTING, JOINING, PLAYING, REFUSED, CLOSED }
 
@@ -151,6 +152,9 @@ func _handle(msg: Dictionary) -> void:
 
 		Protocol_.S_PAUSE:
 			paused = bool(msg["paused"])
+
+		Protocol_.S_SLOT_OVERRIDDEN:
+			slot_overridden.emit(int(msg["slot"]), bool(msg["now_ai"]))
 
 		Protocol_.S_REJECT:
 			var code := int(msg["code"])

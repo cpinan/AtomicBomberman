@@ -149,6 +149,20 @@ var facing: int = Types_.Dir.DOWN
 ## Chosen from the simulation's own RNG, so a replay dies the same way.
 var death_anim: int = 0
 
+## Which of the 13 `cornerhead N` sequences is playing, 1..13, or 0 when none
+## is. Read from `0x41F29B` (`player_update`): every tick it tests all four
+## adjacent cells with the same bomb-or-wall test the AI's own
+## `ai_cell_is_open` uses (minus the AI's danger term), and when all four are
+## blocked AND no special animation is already active, it rolls one of the 13
+## sequences at random and plays it for a fixed span before clearing back to
+## none — ANIMS.TXT's own words for what this is: "a character getting
+## trapped, ready to die." docs/BUGS.md. Chosen from the simulation's own RNG,
+## for the same replay-determinism reason as `death_anim` — and, matching
+## that field's own existing gap, not yet in `to_bytes()`/`state_hash()`; a
+## joining client does not see either one correctly today.
+var cornerhead: int = 0
+var cornerhead_ticks: int = 0
+
 
 func _init() -> void:
 	collected.resize(Const_.POWERUP_COUNT)

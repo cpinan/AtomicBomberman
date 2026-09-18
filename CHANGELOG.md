@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-18 — the last two known gaps
+
+The two items from the prior batch that were correctly left undone —
+because they needed more disassembly work and real netcode design, not a
+quick patch — are done:
+
+- **Cornerhead animations.** The trigger `0x41F29B` uses was found: boxed
+  in on all four sides, every tick, geometric and independent of input —
+  not tied to the closing-wall crush as guessed, since any dead end
+  triggers it, not just one closing in on you. Packed, drawn, tested.
+  Not yet network-synced (same pre-existing gap `death_anim` has).
+- **Netplay server-override key ('o'/'0').** Implemented in the scope this
+  port's architecture actually supports: a connected human's seat can be
+  demoted to AI mid-round and an AI seat freed back to open, broadcast to
+  every peer. Not the original's full pre-round KEY/AI/OFF/JOY lobby cycle
+  — this port has no lobby screen to run that on — but a real, working,
+  tested mechanism for the one transition that means something once play
+  is underway. Protocol version 3→4.
+
+`tools/verify.sh`: **VERIFY OK**, 0 failures.
+
 ## 2026-09-17 — the remaining known-gaps list, worked through
 
 Six items off the standing "known bugs" list, investigated properly rather

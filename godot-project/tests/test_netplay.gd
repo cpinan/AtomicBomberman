@@ -28,6 +28,7 @@ func _init() -> void:
 	await _test_a_whole_match(t)
 	await _test_bots_survive_a_round(t)
 	await _test_a_silent_client_is_reaped(t)
+	await _test_slot_override(t)
 	quit(t.finish())
 
 
@@ -464,6 +465,75 @@ func _test_a_silent_client_is_reaped(t: T_) -> void:
 
 	talker.close()
 	mute.close()
+	server.close()
+
+
+## INPUT.BM: "'o' or '0' lets the host override a client's player
+## selection." server.override_slot()'s own comment explains the scope this
+## implements: a connected human demoted to AI, and an AI freed back to
+## open — not the original's full KEY/AI/JOY/OFF cycle, which this port has
+## no lobby screen to run on.
+func _test_slot_override(t: T_) -> void:
+	var server: Server_ = Server_.new()
+	if not server.listen(PORT + 6, _scheme_text()):
+		t.ok(false, "the server listens for the override test")
+		return
+
+	var a: Client_ = Client_.new()
+	var b: Client_ = Client_.new()
+	# Every peer hears the broadcast (Protocol_.slot_overridden()'s own
+	# comment on why), not only the overridden one — connect both.
+	var heard: Dictionary = {}
+	a.slot_overridden.connect(func(s: int, _ai: bool): heard["a"] = s)
+	b.slot_overridden.connect(func(s: int, _ai: bool): heard["b"] = s)
+	a.connect_to("ws://127.0.0.1:%d" % (PORT + 6), "alice")
+	b.connect_to("ws://127.0.0.1:%d" % (PORT + 6), "bob")
+	for _i in 200:
+		await _pump(server, [a, b])
+		if a.playing() and b.playing():
+			break
+	if not t.ok(a.playing() and b.playing(), "both clients are playing"):
+		server.close()
+		return
+
+	var slot: int = server.override_next_slot()
+	t.ok(slot == a.slot or slot == b.slot,
+		"override_next_slot() picked a connected slot (%d)" % slot)
+	t.ok(server.sim.is_bot(slot), "the sim now runs that slot as a bot")
+
+	for _i in 5:
+		await _pump(server, [a, b])
+	t.eq(heard.get("a", -1), slot, "alice's client heard the override")
+	t.eq(heard.get("b", -1), slot, "and so did bob's")
+
+	# The overridden client's own input no longer reaches the sim: send it
+	# STILL and drive it, then check the player MOVED anyway — think()'s
+	# fallback wander does not sit motionless the way an ignored-but-honest
+	# STILL would if it still reached the sim.
+	var target := a if slot == a.slot else b
+	var before_pos := Vector2i(-1, -1)
+	if server.sim != null:
+		var me := server.sim.player_by_slot(slot)
+		if me != null:
+			before_pos = Vector2i(me.x, me.y)
+	for _i in 60:
+		target.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+		await _pump(server, [a, b])
+	var moved_on_its_own := false
+	if server.sim != null and before_pos.x >= 0:
+		var me2 := server.sim.player_by_slot(slot)
+		if me2 != null:
+			moved_on_its_own = me2.x != before_pos.x or me2.y != before_pos.y
+	t.ok(moved_on_its_own,
+		"the overridden slot moved on its own, not by the client's STILL")
+
+	# And it reverses: an AI slot this created goes back to open.
+	var reverted: int = server.override_next_slot()
+	t.eq(reverted, slot, "the same slot is the next thing to override")
+	t.ok(not server.sim.is_bot(slot), "and it is no longer a bot")
+
+	a.close()
+	b.close()
 	server.close()
 
 

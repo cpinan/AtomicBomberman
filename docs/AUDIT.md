@@ -138,7 +138,7 @@ port does not invent a screen the original does not display.**
 | Hold-to-carry a grabbed bomb | **NO** | `MANUAL.BM`: "you may carry a bomb by grabbing and **holding down** the Drop Bomb button". The port grabs on a second press and drops on a third; the button is an edge here, not a state |
 | The four looks of a bomb | **yes** | `BOMBS.ANI` has `bomb regular green` and `bomb jelly green`, `TRIGBOMB.ANI` has `bomb trigger green`, `DUDS.ANI` has `bomb regular green dud`. The port drew the first for all four until D28 |
 | Punch, carry and pickup animations | **yes** | `PUNCH.ANI`, `PUNBOMB1..4`, `BOMBWALK.ANI`, `BPICKUP.ANI` — four files whose sequence names the port never built, so all three actions were drawn as a standing or walking bomberman |
-| Cornerhead animations | **NO** | `CORNER0..7` hold `cornerhead 0` to `cornerhead 12`, `VALUELST` **330** counts them (not 308). Per `TOOLS/ANIMS.TXT`'s own heading, this is a "character getting trapped, ready to die" state, not decoration — trigger in `BM95.EXE` not yet located. `docs/BUGS.md` Q3. `APPLBITE`, `NUCKBLOW` and `ZEN` (121 frames each, unnamed, a different size) are a separate, unrelated, unexplained family — neither packed |
+| Cornerhead animations | **yes** | `CORNER0..7` hold `cornerhead 0` to `cornerhead 12`, `VALUELST` **330** counts them (not 308). Per `TOOLS/ANIMS.TXT`'s own heading, a "character getting trapped, ready to die" state — boxed in on all four sides, every tick, per `0x41F29B`, geometric and input-independent. `docs/BUGS.md` Q3. `APPLBITE`, `NUCKBLOW` and `ZEN` (121 frames each, unnamed, a different size) are a separate, unrelated, unexplained family — still not packed |
 
 ---
 

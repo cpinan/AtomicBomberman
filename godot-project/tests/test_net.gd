@@ -365,7 +365,10 @@ func _test_match_message(t: T_) -> void:
 	# S_SOUNDS would misread every event after the first. It moved again for
 	# C_INPUT's fourth byte (hold-to-carry) — a version-2 client's 3-byte
 	# input would leave the server reading one byte short of the next message.
-	t.eq(Protocol_.VERSION, 3, "the protocol version moved with each layout")
+	# And again for S_SLOT_OVERRIDDEN (the host-override key) — a new message
+	# type, not a layout change to an existing one, but tracked here anyway
+	# so this assertion stays the one place that has to move when it does.
+	t.eq(Protocol_.VERSION, 4, "the protocol version moved with each layout")
 
 
 # The client rebuilds its field when a match message names a different LEVEL.

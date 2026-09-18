@@ -53,6 +53,13 @@ const KICK_ANIM_TICKS := 6
 ## the swing to read at 20 Hz.
 const PUNCH_ANIM_TICKS := 8
 
+## How long a cornerhead animation plays, in ticks. `0x41F29B` advances its
+## own frame counter on a real-time sub-loop and resets once it exceeds 8 —
+## nine steps — but that inner loop runs against the original's own frame
+## clock, not this port's 20 Hz tick, so nine STEPS is read; nine TICKS is
+## this port's own translation of it, same reasoning as KICK_ANIM_TICKS.
+const CORNERHEAD_TICKS := 9
+
 ## How long a killed player stays on the field before it is gone, in ticks.
 ##
 ## The disc gives no such value. fpc_atomic does — `AtomicDieTimeout = 5000`,
@@ -441,6 +448,12 @@ func tick() -> void:
 	for p in players:
 		if p.alive and not p.dying:
 			_check_flame_death(p)
+
+	# After movement resolves, so this reads the tile the player actually
+	# ended the tick on — the same order `0x41F29B` reads it in.
+	for p in players:
+		if p.alive and not p.dying:
+			_check_cornerhead(p)
 
 	# The campaign's monsters move after the players and before the round is
 	# judged: a rover that walks onto a player kills them this tick, and a
@@ -954,6 +967,39 @@ func _check_flame_death(p: Player_) -> void:
 	if not field.has_flame(p.tile_x(), p.tile_y()):
 		return
 	kill(p, field.flame_owner_at(p.tile_x(), p.tile_y()))
+
+
+## `0x41F29B`: every tick, test all four adjacent cells with the same
+## bomb-or-wall test the AI's `ai_cell_is_open` uses minus its danger term
+## (`0x41E5C3` — bomb_at_tile, then cell_at). When all four are blocked and no
+## other special animation is already running (`cornerhead == 0` here stands
+## in for the original's single shared "current special state" field, which
+## also covers pickup/punch/kick in the real struct), roll one of the 13
+## `cornerhead N` sequences and start it. Read from the disassembly, not
+## invented: the trigger is purely geometric, independent of the player's own
+## input — a player who has simply stopped moving in a dead end triggers it
+## exactly as one who is actively trying to escape.
+func _check_cornerhead(p: Player_) -> void:
+	if p.cornerhead_ticks > 0:
+		p.cornerhead_ticks -= 1
+		if p.cornerhead_ticks == 0:
+			p.cornerhead = 0
+		return
+	if p.pickup_pause > 0 or p.kick_ticks > 0 or p.punch_ticks > 0:
+		return
+	if p.fly_ticks > 0:
+		return          # "out of play entirely: no cell" — same rule as elsewhere
+	var tx := p.tile_x()
+	var ty := p.tile_y()
+	for dir in [Types_.Dir.UP, Types_.Dir.DOWN, Types_.Dir.LEFT,
+			Types_.Dir.RIGHT]:
+		var step: Vector2i = Types_.DIR_VEC[dir]
+		var nx := tx + step.x
+		var ny := ty + step.y
+		if field.is_open(nx, ny) and bomb_at(nx, ny) == null:
+			return
+	p.cornerhead = 1 + rng.randi_range(0, Values_.V[Const_.Res.CORNERHEAD_COUNT] - 1)
+	p.cornerhead_ticks = CORNERHEAD_TICKS
 
 
 ## Age everyone who is dying, and take away those whose animation is over.

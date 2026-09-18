@@ -190,14 +190,27 @@ deeper-nested sub-function's own resource reads get attributed to whichever
 function calls it. The real trigger is in a function `player_update` calls,
 not read yet.
 
-**A reasonable guess, not implemented**: the closing wall's crush
-(`sim.gd` `_advance_hurry()`, "anyone standing there is crushed") is
-exactly "a character getting trapped, ready to die" already modelled in
-this port — a player who cannot escape the wall in time. It is a plausible
-trigger. It is not a read, and this port's own rule (docs/BUGS.md's
-running theme) is not to wire a mechanic to an invented condition and call
-it sourced. Left for the next pass, which should find `player_update`'s own
-call to whatever reads resource 330 before writing any trigger code.
+**Found and implemented, 2026-09-18.** The next pass found `player_update`'s
+own call after all: `0x41F29B` tests all four of the player's adjacent
+cells, every tick, with the same bomb-or-wall test the AI's own
+`ai_cell_is_open` uses minus its danger term (`0x41E5C3` — `bomb_at_tile`,
+then `cell_at`). When all four are blocked and no other special animation
+is already running, it rolls one of the 13 sequences at random and plays
+it for a fixed span. **The trigger is purely geometric and independent of
+input** — a player who has simply stopped moving in a dead end triggers it
+exactly as one who is actively trying to escape, which rules out the
+closing-wall guess above as the ONLY cause (a wall crush is one way to end
+up boxed in on all four sides, not the only one — any dead end does it).
+Implemented in `sim.gd`'s `_check_cornerhead()`, `Player_.cornerhead`/
+`cornerhead_ticks`, drawn in `game_view.gd`'s `draw_player_of()`, unpacked
+via `tools/pack_assets.py`'s `WANTED["CORNER"]`. `tests/test_bomb.gd`'s
+`_test_cornerhead` covers the trigger, its duration, the open-field
+negative case, and that it defers to an in-progress kick/punch/pickup the
+same way the original's single shared state field would. **Not yet
+network-synced** — `cornerhead`/`cornerhead_ticks` aren't in
+`Player_.to_bytes()`/`state_hash()`, the same pre-existing gap `death_anim`
+has, so a joining client does not see either animation correctly today;
+recorded rather than silently left for someone to rediscover.
 
 **`APPLBITE`, `NUCKBLOW` and `ZEN` are a separate, still-unexplained
 family** — not the same thing. Checked this session: neither name appears
@@ -1794,18 +1807,29 @@ than undone one rule at a time.
   affect synchronization" is the only fact about its content anywhere on the
   disc, which rules out reading or writing sim state to reproduce it, and
   there was nothing else to safely show.
-* **The netplay server-override key ('o' or '0')** — investigated, not a
-  small fix. `INPUT.BM`: "If you are a SERVER, you can override the player
-  selection made by a CLIENT." The port's netcode has no client-side
-  selection to override in the first place — a joining client sends no
-  slot-type preference at all; `server.gd` just assigns the next free slot
-  and the wire protocol (`protocol.gd` `S_WELCOME`) only ever tells a client
-  which slot it got, never asks. The original's KEY/AI/OFF/JOY-per-slot
-  choice that a host could override belongs to a client-selection mechanism
-  this port never built, not a missing override on top of one that exists.
-  Implementing the key needs that mechanism first — a new protocol message
-  for a client's own slot-type request, which is a real protocol change,
-  not a keybinding.
+* ~~**The netplay server-override key ('o' or '0')** — investigated, not a
+  small fix.~~ **DONE 2026-09-18, in the scope the architecture actually
+  supports.** `INPUT.BM`: "If you are a SERVER, you can override the player
+  selection made by a CLIENT." The port's netcode has no pre-round lobby and
+  no client-side slot-TYPE selection to override — a joining client sends
+  no preference at all, `server.gd` just seats it — so the original's full
+  KEY/AI/OFF/JOY cycle a host could apply to any seat, at any time before a
+  round starts, is not what this implements. What it does implement, on
+  `Server.override_slot()`/`override_next_slot()`, is the one transition
+  that means something once play is already under way: a connected human's
+  seat can be demoted to an AI (their connection stays open, `_handle()`'s
+  `C_INPUT` guard just stops acting on their packets, and `ai.think()` takes
+  over next tick), and an AI seat this created can be freed back to open for
+  a new human to claim. A second call on the same slot toggles it back.
+  `main.gd`'s `KEY_O`/`KEY_0` (host mode only) call
+  `override_next_slot()`, which walks the roster in order — there is no
+  lobby screen to put a cursor on, so it picks the next occupied-or-bot
+  slot rather than pointing at one. `Protocol_.S_SLOT_OVERRIDDEN`
+  (`VERSION` 3→4) broadcasts the change to every connected peer, not only
+  the affected one, so everyone's own view of the roster can update.
+  `tests/test_netplay.gd`'s `_test_slot_override` covers the demotion, the
+  broadcast reaching both clients, the overridden slot moving on its own
+  rather than by the demoted client's own input, and the reversal.
 * ~~**SOUNDLST 341-349**, "death anim sounds BASED on which anim". Nine
   sounds for twenty-four animations and no way to recover the mapping.~~
   **DONE 2026-09-17, and the premise was wrong.** Checked directly against
@@ -1821,10 +1845,10 @@ than undone one rule at a time.
   `kill()`, alongside `PLAYER_DIED`. Exact frame-sync within the death
   animation ("sync with the anim") is not established and is a guess —
   it plays once, at the moment of death.
-* The **cornerhead animations** (`CORNER0..7`, VALUELST **330**, not 308 as
-  this bullet said until 2026-09-17) — a real "trapped, about to die" state
-  per `TOOLS/ANIMS.TXT`'s own heading (Q3), not decoration. Not packed, and
-  its trigger in `BM95.EXE` not yet located — see Q3's 2026-09-17 addendum.
+* ~~The **cornerhead animations** — not packed, trigger not located.~~
+  **DONE 2026-09-18.** Q3's addendum has the full disassembly find: boxed in
+  on all four sides, every tick, geometric and input-independent. Packed,
+  drawn, tested.
 * **`APPLBITE`, `NUCKBLOW` and `ZEN`** — a separate, unrelated, still
   unexplained animation family (different size than cornerhead, name
   appears nowhere on the disc). Not packed.
