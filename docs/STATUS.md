@@ -65,8 +65,11 @@ Known gaps, each with a file to open. All written up in `docs/BUGS.md` D28.
   sounds for 24 death animations, mapping unrecovered, so nothing plays rather
   than the wrong thing.
 - `tools/pack_assets.py:65` `WANTED` — **cornerhead animations unpacked**
-  (`CORNER0..7`, VALUELST 308; `APPLBITE`/`NUCKBLOW`/`ZEN` are 121 unnamed
-  frames each). Decoration; where they are drawn is not established.
+  (`CORNER0..7`, VALUELST **330**, not 308). Not decoration: `TOOLS/ANIMS.TXT`
+  says this is a "character getting trapped, ready to die" state, distinct
+  from the death animation. Trigger in `BM95.EXE` not yet located —
+  `docs/BUGS.md` Q3. `APPLBITE`/`NUCKBLOW`/`ZEN` (121 unnamed frames each,
+  a different size) are a separate, still-unexplained family.
 - `godot-project/scripts/net/server.gd` — **INPUT.BM's server override** ('o' or
   '0' to override a client's player selection). Nothing implements it.
 

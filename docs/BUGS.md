@@ -163,6 +163,53 @@ This is also the strongest vindication of driving off the `SEQ ` chunks:
 fpc_atomic ignores them, hand-authors its sheets, and therefore has to treat
 the count as a file count and get 8.
 
+**2026-09-17 — what a cornerhead IS, not just how many.** `TOOLS/ANIMS.TXT`'s
+own heading for resource 330, quoted above only in part, states the purpose
+outright, sitting right after the death-animation section it mirrors:
+
+> **Number of Cornerhead Animations:**
+> If your animation is that of a character getting trapped, ready to die
+> you will need to add that here.
+
+So `CORNER0`–`CORNER7` are not decoration — they are a **pre-death "trapped,
+about to die" state**, distinct from the `XPLODE*` death animations and
+presumably played in the moment before one, the way a `!` or gasp precedes a
+death in other games of the era. `docs/STATUS.md`'s "decoration" framing and
+`docs/AUDIT.md`'s matching line are both wrong and should be corrected to
+this.
+
+**What is still NOT established: the trigger.** `tools/bmexe.py --xref`
+attributes `value_of(330)`'s call site to `0x41F29B`, `player_update` — the
+same per-player-per-frame dispatch function Q5.4 already reads for movement
+and the AI — but the actual `value_of(330)` call and whatever selects
+`corner%d` is not in the ~120 instructions directly in that function; per
+the same lesson Q5.4 learned twice over (`0x40A76E`/`0x40B046`, then the AI's
+own search), `bmexe.py`'s function-length and `--xref` attribution both walk
+only to the next DIRECT call target, so an indirectly-reached or
+deeper-nested sub-function's own resource reads get attributed to whichever
+function calls it. The real trigger is in a function `player_update` calls,
+not read yet.
+
+**A reasonable guess, not implemented**: the closing wall's crush
+(`sim.gd` `_advance_hurry()`, "anyone standing there is crushed") is
+exactly "a character getting trapped, ready to die" already modelled in
+this port — a player who cannot escape the wall in time. It is a plausible
+trigger. It is not a read, and this port's own rule (docs/BUGS.md's
+running theme) is not to wire a mechanic to an invented condition and call
+it sourced. Left for the next pass, which should find `player_update`'s own
+call to whatever reads resource 330 before writing any trigger code.
+
+**`APPLBITE`, `NUCKBLOW` and `ZEN` are a separate, still-unexplained
+family** — not the same thing. Checked this session: neither name appears
+anywhere in `original-game/TOOLS/ANIMS.TXT` or any `.BM` text file, and
+their own dimensions (73×73, matching `XPLODE1`/`XPLODE3`/`KFACE`/
+`HEADWIPE`'s "big head" format) do not match `CORNER0`-`7`'s 110×110 at all
+— two different sprite families that happen to sit in the same "still not
+packed" bullet, not one. `docs/BUGS.md`'s "still not done" list and
+`docs/AUDIT.md` should describe them separately from cornerhead rather than
+as one item, since they are not established to be related and nothing found
+this session connects them.
+
 ### Q4 — Death animation count
 **Status:** ANSWERED 2026-09-02, the same way as Q3.
 
@@ -1723,8 +1770,13 @@ than undone one rule at a time.
 * **SOUNDLST 341-349**, "death anim sounds BASED on which anim". Nine sounds
   for twenty-four animations and no way to recover the mapping, so nothing is
   played rather than a wrong thing.
-* The **cornerhead animations** — CORNER0..7, APPLBITE, NUCKBLOW, ZEN, and
-  VALUELST 308's count of them. Decoration, and not packed.
+* The **cornerhead animations** (`CORNER0..7`, VALUELST **330**, not 308 as
+  this bullet said until 2026-09-17) — a real "trapped, about to die" state
+  per `TOOLS/ANIMS.TXT`'s own heading (Q3), not decoration. Not packed, and
+  its trigger in `BM95.EXE` not yet located — see Q3's 2026-09-17 addendum.
+* **`APPLBITE`, `NUCKBLOW` and `ZEN`** — a separate, unrelated, still
+  unexplained animation family (different size than cornerhead, name
+  appears nowhere on the disc). Not packed.
 
 ### D29 — A live session's own report, and what came of chasing each line
 
