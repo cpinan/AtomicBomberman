@@ -143,7 +143,16 @@ EVENTS: dict[str, tuple[int, int]] = {
     "bomb_explode":  (200, 299),   # "299 is the last exploding bomb sound"
     "player_died":   (300, 319),   # "you die in flames sounds"
     "round_win":     (320, 340),   # "we have a winner of the match" (short list)
-    "death_anim":    (341, 349),   # "death anim sounds BASED on which anim"
+    # "death anim sounds BASED on which anim is chosen" — but unlike every
+    # other event in this table, there is no "NNN is the last..." comment
+    # bounding it, and the disc has exactly ONE named resource here (341,
+    # BURNEDUP.RSS) — checked directly: no 342..349 entries exist anywhere
+    # in SOUNDLST.RES, and only BURNEDUP.RSS exists in SOUND/ for this
+    # range. A prior pass declared this (341, 349) by analogy with the
+    # neighbouring 9-wide groups; that was a guess and the guess was wrong.
+    # There is no 24-animation mapping to recover, because there is only
+    # one sound: it plays on every death. docs/BUGS.md D29.
+    "death_anim":    (341, 341),
     "trampoline":    (350, 359),   # "step on a trampoline"
     "bomb_hit_head": (360, 399),   # "you are stunned by a bomb landing on you"
     "powerup_good":  (400, 499),   # "499 is the last standard powerup sound"

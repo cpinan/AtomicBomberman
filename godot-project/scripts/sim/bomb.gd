@@ -41,6 +41,16 @@ var bounces_left: int = 0
 ## ticking when it falls)".
 var carried_by: int = -1
 
+## Set true only when THIS grab happened with the action button already held
+## down — sim.gd's `grab_bomb()` sets it, `_check_hold_to_carry()` reads it.
+## A grab reached any other way (a caller that never modelled a held button —
+## a bot, a direct API call, a fast tap already released again before the
+## carry is even one tick old) leaves this false, and the carry persists
+## indefinitely exactly as it did before hold-to-carry existed — that
+## behaviour is not being taken away from anyone who never asked for it.
+## Only a bomb picked up BY holding requires continuing to hold it.
+var hold_required_to_carry: bool = false
+
 ## Copied from the owner at the moment the bomb starts moving: a jelly bomb
 ## bounces off what stops an ordinary one. Read at kick/punch/throw time rather
 ## than at explode time, for the same reason flame_len is.
@@ -130,6 +140,7 @@ func to_bytes() -> PackedByteArray:
 	b.append(int(triggered))
 	b.append(int(jelly_bounce))
 	b.append(clampi(carried_by + 1, 0, 255))
+	b.append(int(hold_required_to_carry))
 	b.append(bounces_left)
 	b.append(owner)
 	b.append(chain_owner)

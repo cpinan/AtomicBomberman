@@ -210,10 +210,10 @@ func apply_match_state(msg: Dictionary) -> void:
 ## Send this frame's input. Called once per rendered frame rather than per
 ## simulation tick: the server is the clock, and sending more often than the
 ## server ticks only costs bandwidth.
-func send_input(move: int, action: int) -> void:
+func send_input(move: int, action: int, first_held: bool = false) -> void:
 	if state != State.PLAYING:
 		return
-	_send(Protocol_.input(server_tick, move, action))
+	_send(Protocol_.input(server_tick, move, action, first_held))
 
 
 func send_heartbeat() -> void:

@@ -129,6 +129,15 @@ var pickups: int = 0
 var move: int = Types_.MoveState.STILL
 var action: int = Types_.Action.NONE
 
+## Whether the FIRST action button (Drop Bomb) is physically down THIS tick,
+## as opposed to `action`, which is the one-shot edge of it having just been
+## pressed. MANUAL.BM: "If you have the Blue Hand powerup, you may carry a
+## bomb by grabbing and holding down the Drop Bomb button" — the edge alone
+## grabs it (same as any other second-press); this is what lets the sim tell
+## a continued hold from a release, so releasing while carrying puts the
+## bomb down rather than requiring a third explicit press. docs/BUGS.md.
+var action_first_held: bool = false
+
 ## Which way the player is facing, kept when they stop so the sprite does not
 ## snap back to a default.
 var facing: int = Types_.Dir.DOWN
@@ -211,6 +220,7 @@ func to_bytes() -> PackedByteArray:
 	b.append(facing)
 	b.append(move)
 	b.append(action)
+	b.append(int(action_first_held))
 	b.append(clampi(killed_by + 1, 0, 255))
 	_append_i32(b, x)
 	_append_i32(b, y)

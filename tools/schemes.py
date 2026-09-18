@@ -59,6 +59,15 @@ POWERUP_COUNT = 13
 
 SOLID, BRICK, BLANK = "solid", "brick", "blank"
 CELLS = {"#": SOLID, ":": BRICK, ".": BLANK}
+# The inverse, for re-encoding a row of words back to the file's own
+# characters. Used by the "grid" field below and by to_ascii() — NOT by
+# `[0]` (the word's first letter), which collides: "brick" and "blank" both
+# start with 'b', so a grid serialized that way cannot tell them apart. That
+# collision was real and silent until the two-parser check
+# (compare_with_godot(), and godot-project/tests/dump_schemes.gd on the other
+# side) was built and it was noticed the comparison couldn't catch a
+# brick/blank swap either — the same bug, one cause, two symptoms.
+CHAR_OF = {word: ch for ch, word in CELLS.items()}
 
 TEAM_UNSET = -1
 
@@ -214,7 +223,7 @@ def parse(text: str, label: str = "<text>") -> dict:
         "version": version,
         "name": name,
         "density": density,
-        "grid": ["".join(k[0] for k in row) for row in grid],
+        "grid": ["".join(CHAR_OF[k] for k in row) for row in grid],
         "starts": [starts[p] for p in range(PLAYER_COUNT)],
         "powerups": [powerups[p] for p in range(POWERUP_COUNT)],
         "counts": counts,
@@ -227,9 +236,14 @@ def parse(text: str, label: str = "<text>") -> dict:
 
 def to_ascii(scheme: dict) -> str:
     """The map as the file draws it, with the player numbers written in."""
-    grid = [list(row) for row in scheme["grid"]]
-    back = {"s": "#", "b": ":", "l": "."}
-    out = [[back[c] for c in row] for row in grid]
+    # scheme["grid"] already holds the file's own #/:/. characters (CHAR_OF
+    # above), so no decode step is needed here — there used to be one, keyed
+    # by a first-letter encoding that could never actually produce blank's
+    # supposed key ("blank"[0] is 'b', the same as "brick"[0], not the 'l'
+    # this used to look for), so every blank cell rendered as a brick ':'
+    # instead. Silent since --ascii's whole job is a human eyeballing the
+    # output, and it still looked like a plausible map.
+    out = [list(row) for row in scheme["grid"]]
     for i, s in enumerate(scheme["starts"]):
         out[s["y"]][s["x"]] = f"{i}"
     head = f"{scheme['label']}  {scheme['name']!r}  density {scheme['density']}%"

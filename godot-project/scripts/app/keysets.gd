@@ -162,6 +162,13 @@ var _held: Array = [[], []]
 var _first_edge: Array = [false, false]
 var _second_edge: Array = [false, false]
 
+## Whether the FIRST action key is physically down right now, per keyset —
+## distinct from `_first_edge`, which is a one-shot flag cleared the moment
+## the sim reads it. Hold-to-carry (MANUAL.BM, docs/BUGS.md) needs to know
+## the key is STILL down on every tick a bomb is being carried, not just on
+## the tick it was first pressed.
+var _first_held: Array = [false, false]
+
 
 func handle(event: InputEvent) -> void:
 	if not (event is InputEventKey):
@@ -187,9 +194,13 @@ func _handle_for(ks: int, key: InputEventKey) -> void:
 			held.erase(action)
 		return
 	# Actions are edges, not states: one press is one bomb, however long the
-	# key is held. The sim consumes the edge and clears it.
-	if key.keycode == map["first"] and key.pressed:
-		_first_edge[ks] = true
+	# key is held. The sim consumes the edge and clears it. `_first_held` is
+	# the exception — hold-to-carry needs the raw held state alongside the
+	# edge, not instead of it.
+	if key.keycode == map["first"]:
+		if key.pressed:
+			_first_edge[ks] = true
+		_first_held[ks] = key.pressed
 	elif key.keycode == map["second"] and key.pressed:
 		_second_edge[ks] = true
 
@@ -218,12 +229,18 @@ func take_action(ks: int) -> int:
 	return Types_.Action.NONE
 
 
+## Whether the FIRST action key is down right now, for hold-to-carry.
+func first_held(ks: int) -> bool:
+	return _first_held[ks]
+
+
 ## Drop every held key — used when focus is lost, so a player does not keep
 ## walking into a wall while the window is in the background.
 func release_all() -> void:
 	_held = [[], []]
 	_first_edge = [false, false]
 	_second_edge = [false, false]
+	_first_held = [false, false]
 
 
 func held_count(ks: int) -> int:

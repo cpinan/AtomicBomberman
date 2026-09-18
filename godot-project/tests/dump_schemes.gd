@@ -13,18 +13,15 @@
 #
 # Field-for-field with tools/schemes.py's own `schemes[stem]` dict:
 #   name, density        straight copies
-#   grid                 one string per row. tools/schemes.py encodes a row
-#                         by taking CELLS[ch][0] — CELLS maps a source
-#                         character to the WORD "solid"/"brick"/"blank", so
-#                         it is really the word's first letter, and "brick"
-#                         and "blank" both start with 'b'. That looks like an
-#                         accident on the Python side (it means --compare
-#                         cannot tell a brick apart from blank ground by this
-#                         field alone), but this script exists to compare
-#                         against what tools/schemes.py actually emits, not
-#                         what it should — so this reproduces the same
-#                         collision rather than silently fixing it out from
-#                         under the diff. Flagged, not fixed, here.
+#   grid                 one string per row, the scheme FILE's own #/:/.
+#                         characters (tools/schemes.py's CHAR_OF). An earlier
+#                         version of both sides encoded a row by the word's
+#                         first letter ("solid"/"brick"/"blank"), which
+#                         cannot tell brick and blank apart — both start with
+#                         'b' — so a brick/blank swap in either parser could
+#                         not have been caught by this check. Fixed on both
+#                         sides together; see tools/schemes.py's own comment
+#                         on CHAR_OF for how it was found.
 #   starts                [x, y, team] triples, in player order — matches
 #                         compare_with_godot()'s own mine_starts reshaping.
 extends SceneTree
@@ -33,12 +30,12 @@ const Scheme_ := preload("res://scripts/core/scheme.gd")
 const Types_ := preload("res://scripts/core/types.gd")
 const Const_ := preload("res://scripts/core/const.gd")
 
-## Mirrors tools/schemes.py's CELLS = {"#": SOLID, ":": BRICK, ".": BLANK}
-## reduced to its first letter — see the header comment on the collision.
-const GRID_LETTER := {
-	Types_.Brick.SOLID: "s",
-	Types_.Brick.BRICK: "b",
-	Types_.Brick.BLANK: "b",
+## Mirrors tools/schemes.py's CELLS = {"#": SOLID, ":": BRICK, ".": BLANK} —
+## the same characters a .SCH file itself uses, not a derived letter.
+const GRID_CHAR := {
+	Types_.Brick.SOLID: "#",
+	Types_.Brick.BRICK: ":",
+	Types_.Brick.BLANK: ".",
 }
 
 
@@ -76,7 +73,7 @@ func _dump_one(scheme: Scheme_) -> Dictionary:
 	for y in Const_.FIELD_H:
 		var row := ""
 		for x in Const_.FIELD_W:
-			row += GRID_LETTER[scheme.grid[y][x]]
+			row += GRID_CHAR[scheme.grid[y][x]]
 		grid.append(row)
 
 	var starts: Array = []

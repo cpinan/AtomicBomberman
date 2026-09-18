@@ -220,6 +220,12 @@ enum SoundEffect {
 	ROULETTE_TICK,     ## the wheel's periodic tick
 	ROULETTE_CLAP,     ## it landed on something good
 	ROULETTE_BUZZ,     ## it landed on the clog
+	DEATH_CLUNK,       ## SOUNDLST 341 "burnedup" — plays alongside PLAYER_DIED
+	                   ## on every death. The disc's own comment says it is
+	                   ## meant to "sync with the anim," but where in the 24
+	                   ## death animations that sync point falls is not
+	                   ## established, so this plays once at the moment of
+	                   ## death rather than timed to a frame. docs/BUGS.md D29.
 }
 
 ## SoundEffect -> the event name in the sound pack, which is the name
@@ -254,6 +260,7 @@ const SOUND_EVENT := {
 	SoundEffect.ROULETTE_TICK: "roulette_tick",
 	SoundEffect.ROULETTE_CLAP: "roulette_clap",
 	SoundEffect.ROULETTE_BUZZ: "roulette_buzz",
+	SoundEffect.DEATH_CLUNK: "death_anim",
 }
 
 ## The per-disease event, for the twelve ranges at 3000 + 50*i. Separate from

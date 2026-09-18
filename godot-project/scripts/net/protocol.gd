@@ -40,11 +40,14 @@ const Const_ := preload("res://scripts/core/const.gd")
 ##
 ## 1 -> 2: S_SOUNDS carries a third byte per event (the disease a DISEASE_CAUGHT
 ## names), and S_MATCH exists.
-const VERSION := 2
+## 2 -> 3: C_INPUT carries a fourth byte — whether the FIRST action button is
+## held down this tick, for hold-to-carry (docs/BUGS.md, Player_.
+## action_first_held). Snapshot.LAYOUT moves alongside this.
+const VERSION := 3
 
 # Client -> server
 const C_HELLO := 1        ## name, protocol version
-const C_INPUT := 2        ## move state and action for this tick
+const C_INPUT := 2        ## move state, action and held-state for this tick
 const C_HEARTBEAT := 3    ## proof the client is still keeping up
 const C_READY := 4        ## the client has the scheme and can be spawned
 
@@ -83,7 +86,8 @@ static func hello(name: String) -> PackedByteArray:
 	return b
 
 
-static func input(tick: int, move: int, action: int) -> PackedByteArray:
+static func input(tick: int, move: int, action: int,
+		first_held: bool = false) -> PackedByteArray:
 	var b := PackedByteArray()
 	b.append(C_INPUT)
 	# The tick the client believed it was on. The server does NOT act on it —
@@ -92,6 +96,7 @@ static func input(tick: int, move: int, action: int) -> PackedByteArray:
 	_put_u32(b, tick)
 	b.append(move)
 	b.append(action)
+	b.append(int(first_held))
 	return b
 
 
@@ -211,10 +216,11 @@ static func decode(data: PackedByteArray) -> Dictionary:
 				return {}
 			return {"id": id, "version": version, "name": name}
 		C_INPUT:
-			if data.size() < 7:
+			if data.size() < 8:
 				return {}
 			return {"id": id, "tick": _get_u32(data, pos),
-				"move": data[5], "action": data[6]}
+				"move": data[5], "action": data[6],
+				"first_held": data[7] != 0}
 		C_HEARTBEAT:
 			if data.size() < 5:
 				return {}

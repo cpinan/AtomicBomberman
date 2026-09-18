@@ -311,7 +311,8 @@ func fuze_ticks() -> int:
 	return _fuze_ticks
 
 
-func set_input(slot: int, move: int, action: int = Types_.Action.NONE) -> void:
+func set_input(slot: int, move: int, action: int = Types_.Action.NONE,
+		first_held: bool = false) -> void:
 	var p := player_by_slot(slot)
 	if p == null:
 		return
@@ -325,6 +326,7 @@ func set_input(slot: int, move: int, action: int = Types_.Action.NONE) -> void:
 		return
 	p.move = move
 	p.action = action
+	p.action_first_held = first_held
 
 
 func player_by_slot(slot: int) -> Player_:
@@ -422,6 +424,7 @@ func tick() -> void:
 			if p.has_disease(Types_.Disease.POOPS):
 				p.action = Types_.Action.FIRST
 			_player_action(p)
+			_check_hold_to_carry(p)
 
 	# Collection happens after movement: stepping onto a powerup this tick
 	# picks it up this tick.
@@ -616,6 +619,13 @@ static func _move_to_dir(move: int) -> int:
 ##   first, double-pressed grab and throw, or spooge — whichever the player has
 ##   second action         trigger every own triggerable bomb; or punch the
 ##                         bomb ahead, if walking into one
+##
+## Grabbing and then releasing without pressing again (hold-to-carry,
+## `_check_hold_to_carry()` below) drops the bomb rather than throwing it —
+## to throw, press again BEFORE letting go, which is a fast enough
+## release-then-repress that the two arrive in the same tick and `throw_bomb`
+## wins before the release is ever seen as a plain drop. A slower release —
+## genuinely letting go and doing nothing else — sets it down instead.
 ##
 ## Grab and spooge are mutually exclusive by the powerups themselves (taking
 ## the grab disables spooging), so one button serves both.
@@ -1020,6 +1030,17 @@ func kill(p: Player_, by: int = -1) -> void:
 	# 0.07004, "Respawn collected powerups of dead player".
 	repopulate_powerups(p)
 	_play(p.slot, Types_.SoundEffect.PLAYER_DIED)
+	# SOUNDLST 341 "burnedup" — "death anim sounds BASED on which anim is
+	# chosen (this is just clunk-type sound effects to sync with the anim, no
+	# screams or anything)". Read as describing 24 animations sharing 9
+	# sounds; checked directly against the disc and it is not — there is
+	# exactly one resource here (341) and one file (BURNEDUP.RSS), no
+	# "NNN is the last..." comment bounding a wider group the way every
+	# other event has one. tools/rss.py's EVENTS table said (341, 349) by
+	# analogy with the neighbouring 9-wide groups; that was a guess, and
+	# wrong. There is nothing to map: one sound, every death. docs/BUGS.md
+	# D29.
+	_play(p.slot, Types_.SoundEffect.DEATH_CLUNK)
 	# "after a player death" — 282 taunts, the largest range on the disc. Raised
 	# as its own event so the mixer can drop it under load without losing the
 	# scream, which is the one that tells you what happened.
@@ -1736,10 +1757,46 @@ func grab_bomb(p: Player_) -> bool:
 			continue
 		b.carried_by = p.slot
 		b.move_dir = Types_.Dir.NONE
+		# Only a grab that happened WHILE the button was already held asks to
+		# keep being held — see Bomb_.hold_required_to_carry. A grab reached
+		# by any other path (this function called directly, a bot, a tap
+		# already released again) carries indefinitely as it always has.
+		b.hold_required_to_carry = p.action_first_held
 		p.pickup_pause = Values_.V[Const_.Res.PICKUP_PAUSE_FRAMES]
 		_play(p.slot, Types_.SoundEffect.BOMB_GRAB)
 		return true
 	return false
+
+
+## Hold-to-carry's other half. MANUAL.BM: "you may carry a bomb by grabbing
+## and holding down the Drop Bomb button" — `grab_bomb()` above is the grab,
+## an edge like any other; this is what "holding down" means for a
+## simulation that only sees one tick at a time. Called once per player every
+## tick, right after `_player_action()`: if this player is carrying a bomb
+## and the button is NOT down this tick, the carry ends and the bomb is set
+## down where they are standing.
+##
+## Deliberately a DROP, not a throw. MANUAL.BM never says releasing throws
+## it — throwing stays the explicit second press `_player_action()` already
+## routes to `throw_bomb()` (0x423xxx is not disassembled for this; nothing
+## on the disc pins down what release does, so this is the port's own
+## reading, flagged as one). A player who wants to throw still presses the
+## button again before letting go; a player who just stops holding gets the
+## bomb back on the ground, not launched three cells by accident.
+func _check_hold_to_carry(p: Player_) -> void:
+	if p.action_first_held:
+		return
+	for b in bombs:
+		if b.carried_by != p.slot:
+			continue
+		if not b.hold_required_to_carry:
+			return    # this carry was never a hold — nothing to release
+		b.carried_by = -1
+		b.hold_required_to_carry = false
+		b.move_dir = Types_.Dir.NONE
+		b.place_at_tile_centre(p.tile_x(), p.tile_y())
+		p.pickup_pause = 0
+		return
 
 
 ## Throw the carried bomb. It travels along the four-point curve at resources
@@ -1756,6 +1813,7 @@ func throw_bomb(p: Player_) -> bool:
 		var tx := landing.x
 		var ty := landing.y
 		b.carried_by = -1
+		b.hold_required_to_carry = false
 		b.move_dir = p.facing
 		b.jelly_bounce = p.jelly_bombs
 		b.bounces_left = 0

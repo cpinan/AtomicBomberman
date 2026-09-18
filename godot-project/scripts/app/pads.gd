@@ -46,6 +46,10 @@ var _held: Dictionary = {}
 var _first_edge: Dictionary = {}
 var _second_edge: Dictionary = {}
 
+## Whether the FIRST action button is physically down right now, per pad —
+## the keyboard's `_first_held` again, same reason: hold-to-carry.
+var _first_held: Dictionary = {}
+
 
 ## Feed one input event. Buttons and axes both arrive here.
 func handle(event: InputEvent) -> void:
@@ -69,6 +73,7 @@ func _button(event: InputEventJoypadButton) -> void:
 		BUTTON_FIRST:
 			if event.pressed:
 				_first_edge[pad] = true
+			_first_held[pad] = event.pressed
 		BUTTON_SECOND:
 			if event.pressed:
 				_second_edge[pad] = true
@@ -135,12 +140,18 @@ func take_action(pad: int) -> int:
 	return Types_.Action.NONE
 
 
+## Whether the FIRST action button is down right now, for hold-to-carry.
+func first_held(pad: int) -> bool:
+	return bool(_first_held.get(pad, false))
+
+
 ## Drop everything — used when the window loses focus, for the same reason the
 ## keyboard does it.
 func release_all() -> void:
 	_held = {}
 	_first_edge = {}
 	_second_edge = {}
+	_first_held = {}
 
 
 func held_count(pad: int) -> int:

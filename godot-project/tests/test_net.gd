@@ -50,6 +50,12 @@ func _test_protocol_round_trip(t: T_) -> void:
 	t.eq(inp.get("tick"), 1234, "with its tick")
 	t.eq(inp.get("move"), Types_.MoveState.LEFT, "its move")
 	t.eq(inp.get("action"), Types_.Action.FIRST_DOUBLE, "and its action")
+	t.eq(inp.get("first_held"), false,
+		"held defaults false when the caller does not say")
+
+	var held_inp := Protocol_.decode(Protocol_.input(1234,
+		Types_.MoveState.STILL, Types_.Action.NONE, true))
+	t.eq(held_inp.get("first_held"), true, "and true survives the wire")
 
 	var hb := Protocol_.decode(Protocol_.heartbeat(99))
 	t.eq(hb.get("tick"), 99, "heartbeat carries its tick")
@@ -356,8 +362,10 @@ func _test_match_message(t: T_) -> void:
 	t.eq(running.get("champion_team"), -1, "and no champion team")
 
 	# The version had to move for this: a version-1 client reading a version-2
-	# S_SOUNDS would misread every event after the first.
-	t.eq(Protocol_.VERSION, 2, "the protocol version moved with the layout")
+	# S_SOUNDS would misread every event after the first. It moved again for
+	# C_INPUT's fourth byte (hold-to-carry) — a version-2 client's 3-byte
+	# input would leave the server reading one byte short of the next message.
+	t.eq(Protocol_.VERSION, 3, "the protocol version moved with each layout")
 
 
 # The client rebuilds its field when a match message names a different LEVEL.

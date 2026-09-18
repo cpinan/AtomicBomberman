@@ -180,6 +180,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# The two-parser rule (tools/README.md): tools/schemes.py and
+# scripts/core/scheme.gd read the same 67 .SCH files independently, and
+# --compare diffs the two readings. Needs the disc's own SCHEMES folder, so
+# this is skipped (not failed) without one; it also self-skips (exit 0) if
+# Godot is not at the fixed macOS path tools/schemes.py looks for, which is
+# the one part of this gate that is not yet portable off this platform.
+# ---------------------------------------------------------------------------
+if [ -d "$HERE/../original-game/SCHEMES" ]; then
+    if python3 "$HERE/../tools/schemes.py" --compare >/tmp/verify_schemes.$$ 2>&1; then
+        tail -1 /tmp/verify_schemes.$$ | sed 's/^/  ok   /'
+    else
+        echo "  FAIL schemes --compare — the two parsers disagree"
+        tail -20 /tmp/verify_schemes.$$ | sed 's/^/       /'
+        status=1
+    fi
+    rm -f /tmp/verify_schemes.$$
+else
+    echo "       (no original-game/SCHEMES; skipping the two-parser check)"
+fi
+
+# ---------------------------------------------------------------------------
 # Headless suites.
 # ---------------------------------------------------------------------------
 echo

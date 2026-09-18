@@ -176,6 +176,10 @@ func _test_death(t: T_) -> void:
 		"a death is announced")
 	t.ok(_heard(sim, Types_.SoundEffect.DEATH_TAUNT),
 		"and the taunt that follows it")
+	# SOUNDLST 341 "burnedup" — docs/BUGS.md D29: not a 9-sound mapping
+	# across 24 animations, one sound on every death.
+	t.ok(_heard(sim, Types_.SoundEffect.DEATH_CLUNK),
+		"and the clunk that syncs with the animation")
 
 	# The taunt belongs to the KILLER, so the two events differ in slot: the
 	# scream is the victim's and the gloating is not.
@@ -257,6 +261,7 @@ func _test_every_effect_reachable(t: T_) -> void:
 		Types_.SoundEffect.DISEASE_CAUGHT, Types_.SoundEffect.SPOOGE,
 		Types_.SoundEffect.AWESOME, Types_.SoundEffect.DEATH_TAUNT,
 		Types_.SoundEffect.ROUND_WIN, Types_.SoundEffect.DRAW,
+		Types_.SoundEffect.DEATH_CLUNK,
 	]
 	var source := FileAccess.get_file_as_string("res://scripts/sim/sim.gd")
 	for effect in raised_by_sim:

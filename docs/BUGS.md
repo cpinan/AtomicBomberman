@@ -1761,15 +1761,66 @@ than undone one rule at a time.
 
 **Still not done, and named here so it is not rediscovered:**
 
-* MANUAL.BM's **hold-to-carry**: "If you have the Blue Hand powerup, you may
-  carry a bomb by grabbing and **holding down** the Drop Bomb button." The port
-  grabs on a second press and drops on a third. The button is an edge here, not
-  a state.
-* **F1 (help), Alt-N (NETSTATS.TXT), Alt-D (misc info)** — three of MANUAL.BM's
-  six in-game keys.
-* **SOUNDLST 341-349**, "death anim sounds BASED on which anim". Nine sounds
-  for twenty-four animations and no way to recover the mapping, so nothing is
-  played rather than a wrong thing.
+* ~~MANUAL.BM's **hold-to-carry**~~ **DONE 2026-09-17.** "If you have the
+  Blue Hand powerup, you may carry a bomb by grabbing and **holding down**
+  the Drop Bomb button." The grab is still the edge it always was; what's
+  new is `Player_.action_first_held` (threaded through `keysets.gd`/
+  `pads.gd`/the netcode — `Protocol_.VERSION` moved to 3, `Snapshot.LAYOUT`
+  to 2) telling the sim whether the button is STILL down, each tick. A
+  bomb picked up while it was down (`Bomb_.hold_required_to_carry`) is put
+  down, not thrown, the moment it goes back up — a grab reached any other
+  way (a direct call, a tap already released again) still carries
+  indefinitely as it always did, so nothing that never asked for the hold
+  behaviour lost anything. Throwing stays the deliberate second press,
+  which a fast release-then-repress still reaches (`throw_bomb()` runs
+  before a same-tick release would read as a plain drop) — the disc names
+  no release behaviour at all, so both halves of this are the port's own
+  reading, not a second disassembly find. `_check_hold_to_carry()` in
+  `sim.gd`, `tests/test_abilities.gd`.
+* **F1 (help)** — still deliberately free. `MESSAGES.TXT`/`MANUAL.BM` give it
+  to "review help / information files," and the port's only screen with that
+  content is the pre-game ABOUT/MANUAL menu (`scripts/app/screens.gd`
+  `Screen.MANUAL`) — reachable only through `_open_menu()`, which is the
+  same call Escape makes and ends the round to get there. Binding F1 to it
+  would cost a player their round just to read the manual mid-game, which is
+  a worse trade than the key doing nothing. **Alt-N and Alt-D are now
+  implemented** (2026-09-17): Alt-N writes `user://NETSTATS.TXT`
+  (`main.gd` `_write_netstats()`) with whatever's actually known live —
+  host/client mode, `Server.ticks_served` or `Client.server_tick`, and the
+  real snapshot size/bandwidth from `Snapshot_.write()`, the same call
+  `tests/test_net.gd`'s own bandwidth assertions use. Alt-D
+  (`_print_misc_info()`) prints mode/level/player-count/tick to the console
+  rather than drawing an overlay — MANUAL.BM's own warning that it "will
+  affect synchronization" is the only fact about its content anywhere on the
+  disc, which rules out reading or writing sim state to reproduce it, and
+  there was nothing else to safely show.
+* **The netplay server-override key ('o' or '0')** — investigated, not a
+  small fix. `INPUT.BM`: "If you are a SERVER, you can override the player
+  selection made by a CLIENT." The port's netcode has no client-side
+  selection to override in the first place — a joining client sends no
+  slot-type preference at all; `server.gd` just assigns the next free slot
+  and the wire protocol (`protocol.gd` `S_WELCOME`) only ever tells a client
+  which slot it got, never asks. The original's KEY/AI/OFF/JOY-per-slot
+  choice that a host could override belongs to a client-selection mechanism
+  this port never built, not a missing override on top of one that exists.
+  Implementing the key needs that mechanism first — a new protocol message
+  for a client's own slot-type request, which is a real protocol change,
+  not a keybinding.
+* ~~**SOUNDLST 341-349**, "death anim sounds BASED on which anim". Nine
+  sounds for twenty-four animations and no way to recover the mapping.~~
+  **DONE 2026-09-17, and the premise was wrong.** Checked directly against
+  the disc rather than the comment alone: SOUNDLST.RES has exactly ONE named
+  resource in this range (341, "burnedup") and no "NNN is the last..."
+  comment bounding it the way every other event has one; `SOUND/` has
+  exactly one matching file, `BURNEDUP.RSS`. `tools/rss.py`'s own EVENTS
+  table declared `(341, 349)` by analogy with the neighbouring 9-wide
+  groups — a guess, and wrong, corrected to `(341, 341)`; the packed output
+  was unaffected either way, since `event_takes()`'s own gap rule already
+  stopped at 342. There was never a 24-into-9 mapping to recover: one
+  sound, every death. `Types_.SoundEffect.DEATH_CLUNK` now plays it in
+  `kill()`, alongside `PLAYER_DIED`. Exact frame-sync within the death
+  animation ("sync with the anim") is not established and is a guess —
+  it plays once, at the moment of death.
 * The **cornerhead animations** (`CORNER0..7`, VALUELST **330**, not 308 as
   this bullet said until 2026-09-17) — a real "trapped, about to die" state
   per `TOOLS/ANIMS.TXT`'s own heading (Q3), not decoration. Not packed, and

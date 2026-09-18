@@ -102,6 +102,7 @@ const Values_ := preload("res://scripts/core/values.gd")
 const Field_ := preload("res://scripts/sim/field.gd")
 const Player_ := preload("res://scripts/sim/player.gd")
 const Bomb_ := preload("res://scripts/sim/bomb.gd")
+const Snapshot_ := preload("res://scripts/net/snapshot.gd")
 const Messages_ := preload("res://scripts/core/messages.gd")
 const Scheme_ := preload("res://scripts/core/scheme.gd")
 const Sim_ := preload("res://scripts/sim/sim.gd")
@@ -371,6 +372,54 @@ func _size_the_window(args: Dictionary) -> void:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	print("main: window %dx%d (%dx of 640x480) on a %dx%d screen"
 		% [size.x, size.y, want, screen.size.x, screen.size.y])
+
+
+## "Alt-N - dump out the networking statistics (NETSTATS.TXT)". MANUAL.BM
+## names the file and nothing else about its format — no data file states
+## one, unlike bmstats.dat/.txt's resource 900-928. Written the same way
+## those are: user://, plain text, on demand, a real measurement rather than
+## an invented one. The size and rate come straight from Snapshot_.write(),
+## the same call tests/test_net.gd's own bandwidth assertions use.
+func _write_netstats() -> void:
+	var lines: Array[String] = ["NETSTATS.TXT", ""]
+	match mode:
+		Mode.HOST:
+			lines.append("mode: host")
+			lines.append("clients connected: %d" % server.player_count())
+			lines.append("ticks served: %d" % server.ticks_served)
+		Mode.JOIN:
+			lines.append("mode: client")
+			lines.append("server tick: %d" % client.server_tick)
+		_:
+			lines.append("mode: local (no network session)")
+	if sim != null:
+		var size := Snapshot_.write(sim).size()
+		var bps := size * Const_.TICK_HZ
+		lines.append("snapshot size: %d bytes" % size)
+		lines.append("bandwidth per client: %.1f kbps at %d Hz"
+			% [bps * 8.0 / 1000.0, Const_.TICK_HZ])
+	var f := FileAccess.open("user://NETSTATS.TXT", FileAccess.WRITE)
+	if f != null:
+		f.store_string("\n".join(lines) + "\n")
+		f.close()
+		print("main: wrote NETSTATS.TXT")
+
+
+## "Alt-D - display the misc info screen". MANUAL.BM's own warning —
+## "use it VERY sparingly when network play is going on... it will affect
+## synchronization!" — is the one fact known about it beyond the name: it
+## does something disruptive enough to desync a match, which nothing this
+## port could safely reproduce is worth reproducing. What IS safe, and
+## shown here instead, is everything this build already knows about its own
+## state without touching the simulation: printed to the console rather
+## than drawn, since no in-game overlay for it exists and inventing one
+## would be exactly the kind of screen this file elsewhere warns against
+## drawing from nothing.
+func _print_misc_info() -> void:
+	var player_count := sim.players.size() if sim != null else players
+	print("main: misc info — mode=%s level=%d players=%d tick=%s"
+		% [Mode.keys()[mode], level, player_count,
+			str(sim.tick_count) if sim != null else "n/a"])
 
 
 func _toggle_fullscreen() -> void:
@@ -1076,6 +1125,7 @@ func _poll_client(delta: float) -> void:
 	# fight itself.
 	var move := keys.move_state(0)
 	var act := keys.take_action(0)
+	var held := keys.first_held(0)
 	var connected := Pads_.connected()
 	if not connected.is_empty():
 		var pad: int = connected[0]
@@ -1084,7 +1134,8 @@ func _poll_client(delta: float) -> void:
 		var pad_action := pads.take_action(pad)
 		if act == Types_.Action.NONE:
 			act = pad_action
-	client.send_input(move, act)
+			held = pads.first_held(pad)
+	client.send_input(move, act, held)
 
 	# Sounds arrive as they are broadcast, which is per server tick, but this
 	# runs per rendered frame. Batching them here means the mixer's one-per-
@@ -1116,7 +1167,7 @@ func _step() -> void:
 		var action := keys.take_action(ks)
 		if sim.tick_count + 1 == _auto_bomb_tick:
 			action = Types_.Action.FIRST
-		sim.set_input(slot, keys.move_state(ks), action)
+		sim.set_input(slot, keys.move_state(ks), action, keys.first_held(ks))
 	# The same for the pads. JOY n is the n-th pad Godot reports, so pulling a
 	# pad out renumbers the rest rather than leaving a seat driven by nothing.
 	var connected := Pads_.connected()
@@ -1127,7 +1178,8 @@ func _step() -> void:
 		var pad_action := pads.take_action(pad)
 		if sim.tick_count + 1 == _auto_bomb_tick:
 			pad_action = Types_.Action.FIRST
-		sim.set_input(_pad_slots[i], pads.move_state(pad), pad_action)
+		sim.set_input(_pad_slots[i], pads.move_state(pad), pad_action,
+			pads.first_held(pad))
 	# Slots beyond the two keysets get the auto-bomb too, so a ten-player
 	# capture is not limited to the two that have keys.
 	if sim.tick_count + 1 == _auto_bomb_tick:
@@ -1600,6 +1652,25 @@ func _input(event: InputEvent) -> void:
 				# specific layout.
 				if mode == Mode.LOCAL and the_match != null:
 					_start_local_round()
+			KEY_N:
+				# "Alt-N - dump out the networking statistics (NETSTATS.TXT)".
+				# MANUAL.BM. Only meaningful with a network session actually
+				# running; a local game writes what it can — that there is
+				# none — rather than staying silent about the key doing
+				# nothing.
+				if pressed.alt_pressed:
+					_write_netstats()
+			KEY_D:
+				# "Alt-D - display the misc info screen (use it VERY
+				# sparingly when network play is going on... it will affect
+				# synchronization!)". MANUAL.BM names the key and the warning
+				# but not the screen's actual content — nothing on the disc
+				# does. What IS known and safe to show without touching the
+				# simulation (the warning is exactly why nothing here reads
+				# or writes sim state) is everything else this build already
+				# knows about itself: mode, tick, level, player count.
+				if pressed.alt_pressed:
+					_print_misc_info()
 		if view != null and view.editor_active:
 			_editor_key(pressed.keycode)
 	if view != null and view.editor_active and sim != null:

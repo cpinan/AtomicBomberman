@@ -22,7 +22,7 @@ const Player_ := preload("res://scripts/sim/player.gd")
 const Bomb_ := preload("res://scripts/sim/bomb.gd")
 
 ## Bumped when the layout changes, alongside Protocol.VERSION.
-const LAYOUT := 1
+const LAYOUT := 2
 
 
 static func write(sim: RefCounted) -> PackedByteArray:
@@ -158,6 +158,7 @@ static func _read_player(p: Player_, d: PackedByteArray, at: int) -> void:
 	p.facing = d[pos]; pos += 1
 	p.move = d[pos]; pos += 1
 	p.action = d[pos]; pos += 1
+	p.action_first_held = d[pos] != 0; pos += 1
 	p.killed_by = int(d[pos]) - 1; pos += 1
 	p.x = _get_i32(d, pos); pos += 4
 	p.y = _get_i32(d, pos); pos += 4
@@ -200,6 +201,7 @@ static func _read_bomb(b: Bomb_, d: PackedByteArray, at: int) -> void:
 	b.triggered = d[pos] != 0; pos += 1
 	b.jelly_bounce = d[pos] != 0; pos += 1
 	b.carried_by = int(d[pos]) - 1; pos += 1
+	b.hold_required_to_carry = d[pos] != 0; pos += 1
 	b.bounces_left = d[pos]; pos += 1
 	b.owner = d[pos]; pos += 1
 	b.chain_owner = d[pos]; pos += 1

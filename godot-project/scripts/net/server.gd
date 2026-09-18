@@ -320,7 +320,7 @@ func _handle(from: int, msg: Dictionary) -> void:
 			# The input is applied to THEIR seat and no other, whatever the
 			# packet claims.
 			sim.set_input(int(seat["slot"]), int(msg["move"]),
-				int(msg["action"]))
+				int(msg["action"]), bool(msg.get("first_held", false)))
 		Protocol_.C_HEARTBEAT:
 			var seat2 = peers.get(from, null)
 			if seat2 != null:

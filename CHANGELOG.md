@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-09-17 — the remaining known-gaps list, worked through
+
+Six items off the standing "known bugs" list, investigated properly rather
+than patched blind — two turned out to need real architecture work and were
+correctly left as documented gaps rather than forced:
+
+- **Hold-to-carry bombs — implemented.** The manual says holding Drop Bomb
+  carries it, releasing drops it; the port grabbed on a second press and
+  threw on a third. Now threads the button's live held-state from input
+  through netcode into the sim (`Protocol_.VERSION` 2→3, `Snapshot.LAYOUT`
+  1→2 — new synced fields, not a wire-format-incompatible change in
+  practice since nothing shipped against version 2 outside this repo).
+- **Death-animation sound mapping — resolved, and the premise was wrong.**
+  "9 sounds for 24 animations, unrecoverable" wasn't true: `SOUNDLST.RES`
+  has exactly one resource in that range (341, "burnedup"), not nine —
+  `tools/rss.py`'s own event-range guess was wrong by analogy with
+  neighbouring groups. Corrected the range, wired the one real sound up.
+- **Two of three missing manual keys — implemented.** Alt-N writes a real
+  `NETSTATS.TXT` (actual snapshot size/bandwidth, not invented numbers);
+  Alt-D prints what the port actually knows, since the manual's only stated
+  fact about this screen is a warning it "will affect synchronization" —
+  not enough to build a real one from. F1 stays a deliberate no-op: the
+  port's only matching content is the pre-game manual screen, reachable
+  only by ending the current round to open the menu — worse than not
+  having the key.
+- **Netplay server-override key — investigated, correctly not implemented.**
+  `INPUT.BM` confirms the key, but the port's netcode has no client-side
+  slot-type selection to override in the first place — a joining client
+  never sends one. Needs a new protocol message before a keybinding means
+  anything; documented rather than faked.
+- **Cornerhead animations — real finding, correctly not implemented.** The
+  disc's own `TOOLS/ANIMS.TXT` states what they're for: a "trapped, about
+  to die" pre-death state, not decoration — three docs had this wrong.
+  Also caught a transcription error (resource 330, not 308) repeated
+  across `docs/AUDIT.md`/`BUGS.md`/`STATUS.md`. Not implemented: the actual
+  trigger call site isn't in the disassembly reached so far, and a plausible
+  guess (the closing wall's crush) was correctly left as a guess, not code.
+- **The two-parser scheme check's own blind spot — fixed, and it found a
+  real bug on the way.** The check's grid encoding collapsed brick and
+  blank to the same letter on both sides, so a brick/blank divergence
+  between the two parsers couldn't have been caught. Fixed to use `#`/`:`/
+  `.` directly on both sides — and in the process found that
+  `tools/schemes.py --ascii` was rendering every blank cell as a brick,
+  a real, separate, user-visible bug the same collision was hiding. Also
+  wired the check into `verify.sh` for the first time (gated on the disc
+  being present, so a machine without `original-game/` still passes).
+
+`tools/verify.sh`: **VERIFY OK**, 0 failures, all four fixes verified
+together in one pass.
+
 ## 2026-09-17 — six more from a live session (D29)
 
 Real bugs found while the port was actively being played, fixed and
