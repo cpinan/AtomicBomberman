@@ -35,7 +35,7 @@ var alpha: float = 0.0
 ## turns it on with --debug-grid.
 var show_grid: bool = false
 
-## The test editor (F3): place bricks and powerups, spawn bombs, kill or
+## The test editor (T): place bricks and powerups, spawn bombs, kill or
 ## disease a player, all live in a running round, for exercising every
 ## mechanic without depending on a scheme's own layout. main.gd owns the
 ## input and the sim calls; this only reads the state back to draw the cursor
@@ -1083,7 +1083,7 @@ func _draw_test_editor() -> void:
 		if editor_powerup >= 0 and editor_powerup < EDITOR_POWERUP_NAMES.size() \
 		else "?"
 	var lines := [
-		"TEST EDITOR — F3 to leave",
+		"TEST EDITOR — T to leave",
 		"LMB cycle brick   RMB place powerup   [ ] choose: %s" % name,
 		"B bomb   K kill   D disease   C cure   R clear field",
 	]

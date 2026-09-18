@@ -1582,10 +1582,15 @@ func _input(event: InputEvent) -> void:
 				# a second meaning.
 				if view != null:
 					view.show_grid = not view.show_grid
-			KEY_F3:
+			KEY_T:
 				# The test editor — place bricks and powerups, spawn bombs,
 				# kill/disease/cure a player, all live, so every mechanic can
 				# be exercised without depending on which scheme is loaded.
+				# Was F3, which macOS reserves for Mission Control on most
+				# keyboards — the OS ate the keystroke before Godot ever saw
+				# it, and on the ones where it didn't, whatever ran it next
+				# still had a phantom Mission Control invocation to clean up.
+				# A plain letter has no such collision.
 				if view != null:
 					view.editor_active = not view.editor_active
 			KEY_F11:

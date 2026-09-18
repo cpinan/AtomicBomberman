@@ -39,10 +39,12 @@ Never run two Godot processes against this project at once — headless test
 runs and a live window both hit the same LAN discovery port and can corrupt
 each other's results. Kill stray processes first: `pgrep -fl Godot`.
 
-## The F3 test editor
+## The T test editor
 
-Press **F3** in a running game to open a live test editor, for exercising
-every mechanic without hunting for the right scheme or level:
+Press **T** in a running game to open a live test editor, for exercising
+every mechanic without hunting for the right scheme or level. (Was F3 —
+macOS reserves that for Mission Control on most keyboards, so the OS ate
+the keystroke before the game ever saw it.)
 
 - **Left click** a cell — cycles solid → brick → blank
 - **Right click** a cell — drops the selected powerup there, immediately

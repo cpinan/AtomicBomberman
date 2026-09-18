@@ -272,10 +272,29 @@ func _draw_options() -> void:
 		_shadowed(font, Vector2(32, y), menu.label_of(item), colour)
 		if not menu.is_action(item):
 			_shadowed(font, Vector2(360, y), menu.value_text(item), colour)
+			if item == Menu_.Item.LEVEL and chosen:
+				_draw_level_preview()
 		y += OPTIONS_ROW_H
 
 	_shadowed(small, Vector2(28, Const_.SCREEN_H - 26),
 		"Escape returns to the menu", INK_DIM)
+
+
+## A small live thumbnail of the highlighted level's own field art, so
+## picking a level shows what it looks like rather than a name alone.
+## "Random Each Game" (menu.level == Menu_.LEVEL_RANDOM) has no one
+## background to show, so nothing is drawn for it.
+const LEVEL_PREVIEW_RECT := Rect2(508, 34, 104, 78)
+
+
+func _draw_level_preview() -> void:
+	if menu.level == Menu_.LEVEL_RANDOM or pack == null:
+		return
+	var tex := pack.background(menu.level)
+	if tex == null:
+		return
+	draw_rect(LEVEL_PREVIEW_RECT.grow(2), Color(1, 0.95, 0.5, 0.9), false, 2.0)
+	draw_texture_rect(tex, LEVEL_PREVIEW_RECT, false)
 
 
 ## MESSAGES.TXT 1100-1140's own screen: twelve bindings and a restore row.

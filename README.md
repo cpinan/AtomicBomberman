@@ -41,7 +41,7 @@ all drawn from the original's own sprite sheets.
   and bots with a real (if simplified) AI.
 - **A from-scratch bot AI** built by disassembling `BM95.EXE`'s own decision
   routine — not a fresh design, a read of what the original does.
-- **A live in-game test editor** (press F3) for placing bricks, dropping any
+- **A live in-game test editor** (press T) for placing bricks, dropping any
   powerup, spawning bombs, and killing/curing/diseasing a player, all
   without needing the right scheme or level loaded.
 
@@ -220,5 +220,5 @@ EXPORT=1 ./verify.sh         # plus both export presets, .pck probed
 Never run two Godot processes against this project at once — they share a
 LAN discovery port and will corrupt each other's test results.
 
-See `godot-project/README.md` for the full flag list and the F3 test
+See `godot-project/README.md` for the full flag list and the T test
 editor's controls.
