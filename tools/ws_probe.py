@@ -35,8 +35,15 @@ import sys
 
 C_HELLO, C_INPUT, C_HEARTBEAT, C_READY = 1, 2, 3, 4
 S_WELCOME, S_SNAPSHOT, S_ROUND_OVER = 64, 65, 66
-S_SOUNDS, S_REJECT, S_PAUSE, S_MATCH = 67, 68, 69, 70
-PROTOCOL_VERSION = 2
+S_SOUNDS, S_REJECT, S_PAUSE, S_MATCH, S_SLOT_OVERRIDDEN = 67, 68, 69, 70, 71
+# Must track godot-project/scripts/net/protocol.gd's own Protocol_.VERSION —
+# this file speaks the wire format by hand and there is no shared import to
+# keep the two in sync. Found stale at 2 (2026-09-18): the real server had
+# moved to 4 across two unrelated sessions (hold-to-carry, then the netplay
+# override key) and every probe run since had been silently REJECTED on a
+# version mismatch, which is a specific enough error that nobody noticed the
+# probe itself — not the server — was the stale half.
+PROTOCOL_VERSION = 4
 
 NAMES = {
     S_WELCOME: "welcome", S_SNAPSHOT: "snapshot", S_ROUND_OVER: "round over",
