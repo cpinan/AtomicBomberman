@@ -979,6 +979,13 @@ func _check_flame_death(p: Player_) -> void:
 ## invented: the trigger is purely geometric, independent of the player's own
 ## input — a player who has simply stopped moving in a dead end triggers it
 ## exactly as one who is actively trying to escape.
+##
+## Departure from the disassembly: the original reroll a fresh random variant
+## every span for as long as the player stays boxed in, which onscreen reads
+## as "every animation plays" rather than one. `p.cornered` latches once a
+## variant has been rolled for this trapped episode, so it plays out exactly
+## once and holds until the player is no longer boxed in — the episode ends
+## and the latch clears the moment any adjacent cell opens up.
 func _check_cornerhead(p: Player_) -> void:
 	if p.cornerhead_ticks > 0:
 		p.cornerhead_ticks -= 1
@@ -997,7 +1004,11 @@ func _check_cornerhead(p: Player_) -> void:
 		var nx := tx + step.x
 		var ny := ty + step.y
 		if field.is_open(nx, ny) and bomb_at(nx, ny) == null:
+			p.cornered = false
 			return
+	if p.cornered:
+		return          # already played this trapped episode's one variant
+	p.cornered = true
 	p.cornerhead = 1 + rng.randi_range(0, Values_.V[Const_.Res.CORNERHEAD_COUNT] - 1)
 	p.cornerhead_ticks = CORNERHEAD_TICKS
 
@@ -1489,6 +1500,12 @@ func _roll_bomb(b: Bomb_) -> void:
 
 	if _bomb_blocked(b, lead_x, lead_y):
 		if b.jelly_bounce:
+			# Snapped back to the cell centre it bounced off of, same as the
+			# stop path below — the half-cell lookahead lets the bomb creep
+			# right up to the wall before this fires, and without the snap it
+			# stayed there, sprite sitting into the wall, for the tick before
+			# the reversed direction pulled it away.
+			b.place_at_tile_centre(b.tile_x(), b.tile_y())
 			b.move_dir = _opposite(b.move_dir)
 			b.state = Types_.BombState.WOBBLE
 			_play(b.owner, Types_.SoundEffect.BOMB_BOUNCE)
@@ -1773,6 +1790,13 @@ func punch_bomb(p: Player_) -> bool:
 	# Three cells through the air, but no further than the nearest open one —
 	# see _landing_cell(). Field bounds are one case of "not open".
 	var landing := _landing_cell(b, b.tile_x(), b.tile_y(), p.facing, 3)
+	if landing.x == b.tile_x() and landing.y == b.tile_y():
+		# Nowhere to fly to — the very next cell was already blocked. Without
+		# this the punch played its full animation and sound over a
+		# zero-distance _launch() that visibly went nowhere, which read as
+		# "the glove doesn't work" even though can_punch and the bomb lookup
+		# were both fine.
+		return false
 	var tx := landing.x
 	var ty := landing.y
 	b.move_dir = p.facing
@@ -1992,16 +2016,20 @@ func give_powerup(p: Player_, which: int) -> bool:
 					pool.append(other)
 			return give_powerup(p, pool[rng.randi_range(0, pool.size() - 1)])
 
-		Types_.PowerUp.DISEASE, Types_.PowerUp.SUPER_BAD_DISEASE:
+		Types_.PowerUp.DISEASE:
 			# Counted like any other pickup — VALUELST 122's wording, "will a
 			# disease recycle like other powerups when it COMES OUT OF YOU",
 			# only makes sense if the game tracks that you took one, and the
 			# match statistics need it. repopulate_powerups() is what then
 			# declines to put it back.
 			p.collected[which] += 1
-			var pool: Array = Types_.ORDINARY_DISEASES \
-				if which == Types_.PowerUp.DISEASE else Types_.SUPER_BAD_DISEASES
-			return _inflict(p, pool)
+			return _inflict(p, Types_.ORDINARY_DISEASES)
+
+		Types_.PowerUp.SUPER_BAD_DISEASE:
+			# MANUAL.BM: "Gives you up to three (3) diseases simultaneously" —
+			# not one, and not the whole 4-item pool either.
+			p.collected[which] += 1
+			return _inflict_several(p, Types_.SUPER_BAD_DISEASES, 3)
 
 	if at_cap(p, which):
 		return false
@@ -2026,22 +2054,30 @@ func give_powerup(p: Player_, which: int) -> bool:
 			p.can_kick = true
 		Types_.PowerUp.PUNCH:
 			p.can_punch = true
+			# MANUAL.BM's exclusivity table: "Boxing Glove will drop Trigger."
 			_drop_trigger(p)
 		Types_.PowerUp.GRAB:
 			p.can_grab = true
+			# MANUAL.BM: "Blue Hand will drop Spooge."
+			p.can_spooge = false
+			p.collected[Types_.PowerUp.SPOOGE] = 0
 		Types_.PowerUp.SPOOGE:
 			p.can_spooge = true
-			_drop_trigger(p)
+			# MANUAL.BM: "Spooge will drop Blue Hand."
+			p.can_grab = false
+			p.collected[Types_.PowerUp.GRAB] = 0
 		Types_.PowerUp.JELLY:
 			p.jelly_bombs = true
+			# MANUAL.BM: "Jelly will drop Trigger."
+			_drop_trigger(p)
 		Types_.PowerUp.TRIGGER:
-			# Trigger is exclusive with spooge and punch, and taking it DROPS
-			# both. AtomBomberman's notes: "you can have oil+punch, but you
-			# cant have trigger+oil or trigger+punch / if you have oil+punch
-			# and you pick-up trigger, you will drop oil AND punch".
-			p.can_spooge = false
+			# Trigger is exclusive with jelly and punch, and taking it DROPS
+			# both — MANUAL.BM's own exclusivity table: "Trigger will drop
+			# Jelly and Boxing Glove." (Grab and Spooge are a separate,
+			# unrelated exclusive pair, not touched by Trigger.)
+			p.jelly_bombs = false
 			p.can_punch = false
-			p.collected[Types_.PowerUp.SPOOGE] = 0
+			p.collected[Types_.PowerUp.JELLY] = 0
 			p.collected[Types_.PowerUp.PUNCH] = 0
 			# Topping up an existing trigger stock rather than replacing it —
 			# VALUELST 0.13003's changelog: "give extra trigger bomb if
@@ -2092,7 +2128,8 @@ func recompute_powers(p: Player_) -> void:
 		p.trigger_bombs = 0
 
 
-## Spooge and punch are dropped when trigger is taken, and vice versa.
+## Jelly and punch are dropped when trigger is taken, and vice versa —
+## MANUAL.BM's exclusivity table.
 func _drop_trigger(p: Player_) -> void:
 	p.trigger_bombs = 0
 	p.collected[Types_.PowerUp.TRIGGER] = 0
@@ -2105,6 +2142,27 @@ func _inflict(p: Player_, pool: Array) -> bool:
 	if pool.is_empty():
 		return false
 	return catch_disease(p, pool[rng.randi_range(0, pool.size() - 1)])
+
+
+## Infect with up to `count` distinct diseases from `pool`, at random and
+## without repeats — SUPER_BAD_DISEASE's "up to three simultaneously" rather
+## than DISEASE's one. Returns true if at least one took (a player who
+## already has all of them catches nothing new).
+func _inflict_several(p: Player_, pool: Array, count: int) -> bool:
+	# Fisher-Yates over the sim's own `rng`, not Array.shuffle()'s global one —
+	# this has to stay reproducible for replay/netplay determinism the same
+	# way every other roll in this file is.
+	var shuffled: Array = pool.duplicate()
+	for i in range(shuffled.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp = shuffled[i]
+		shuffled[i] = shuffled[j]
+		shuffled[j] = tmp
+	var caught := false
+	for i in mini(count, shuffled.size()):
+		if catch_disease(p, shuffled[i]):
+			caught = true
+	return caught
 
 
 ## Give a player a disease. Returns false if they already had it.

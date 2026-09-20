@@ -22,6 +22,8 @@ const Values_ := preload("res://scripts/core/values.gd")
 const Menu_ := preload("res://scripts/app/menu.gd")
 const BitFont_ := preload("res://scripts/render/bitfont.gd")
 const Pack_ := preload("res://scripts/render/pack.gd")
+const Scheme_ := preload("res://scripts/core/scheme.gd")
+const Types_ := preload("res://scripts/core/types.gd")
 
 var screens: Screens_ = null
 var menu: Menu_ = null
@@ -286,6 +288,16 @@ func _draw_options() -> void:
 ## background to show, so nothing is drawn for it.
 const LEVEL_PREVIEW_RECT := Rect2(508, 34, 104, 78)
 
+## Colours for the brick layout drawn over the background: undestructible
+## walls and destructible bricks read as two shades, blank floor left
+## transparent so the background shows through.
+const PREVIEW_SOLID := Color(0.15, 0.15, 0.18, 0.95)
+const PREVIEW_BRICK := Color(0.55, 0.38, 0.2, 0.95)
+
+## scheme_name() -> parsed Scheme_, so switching the highlighted level does
+## not re-parse its scheme text every single frame.
+var _preview_schemes: Dictionary = {}
+
 
 func _draw_level_preview() -> void:
 	if menu.level == Menu_.LEVEL_RANDOM or pack == null:
@@ -295,6 +307,64 @@ func _draw_level_preview() -> void:
 		return
 	draw_rect(LEVEL_PREVIEW_RECT.grow(2), Color(1, 0.95, 0.5, 0.9), false, 2.0)
 	draw_texture_rect(tex, LEVEL_PREVIEW_RECT, false)
+
+	var scheme := _scheme_for_preview()
+	if scheme == null:
+		return
+	var cell_w := LEVEL_PREVIEW_RECT.size.x / Const_.FIELD_W
+	var cell_h := LEVEL_PREVIEW_RECT.size.y / Const_.FIELD_H
+	for y in Const_.FIELD_H:
+		for x in Const_.FIELD_W:
+			var kind: int = scheme.cell(x, y)
+			if kind == Types_.Brick.BLANK:
+				continue
+			var colour := PREVIEW_SOLID if kind == Types_.Brick.SOLID \
+				else PREVIEW_BRICK
+			var r := Rect2(
+				LEVEL_PREVIEW_RECT.position + Vector2(x * cell_w, y * cell_h),
+				Vector2(cell_w, cell_h))
+			draw_rect(r, colour)
+
+
+## Parses (and caches) the highlighted level's scheme, for the layout drawn
+## over its background art. Null when the pack has no scheme text for it —
+## the preview then falls back to the background alone.
+func _scheme_for_preview() -> Scheme_:
+	var name := menu.scheme_name()
+	if _preview_schemes.has(name):
+		return _preview_schemes[name]
+	var scheme := Scheme_.new()
+	var ok: bool
+	if menu.built_in_selected():
+		ok = scheme.parse_text(_builtin_grid_text(), name)
+	else:
+		ok = scheme.parse_text(pack.scheme_text(name), name)
+	_preview_schemes[name] = scheme if ok else null
+	return _preview_schemes[name]
+
+
+## The classic pillar grid main.gd's `_builtin_scheme()` falls back to when no
+## scheme is chosen — duplicated here (rather than reached through main.gd)
+## because this is a menu-only preview with no round to attach a real Scheme_
+## to. Starts and powerups are required for parse_text() to accept the text
+## even though the preview only reads the row layout back out.
+func _builtin_grid_text() -> String:
+	var lines := PackedStringArray()
+	lines.append("-V,2")
+	lines.append("-N,Built-in grid (10)")
+	lines.append("-B,90")
+	for y in Const_.FIELD_H:
+		var row := ""
+		for x in Const_.FIELD_W:
+			row += "#" if (x % 2 == 1 and y % 2 == 1) else ":"
+		lines.append("-R,%2d,%s" % [y, row])
+	var starts := [[0, 0], [14, 10], [0, 10], [14, 0], [6, 4],
+		[8, 0], [12, 4], [2, 6], [10, 8], [6, 10]]
+	for p in Const_.PLAYER_COUNT:
+		lines.append("-S,%d,%d,%d,%d" % [p, starts[p][0], starts[p][1], p % 2])
+	for i in Const_.POWERUP_COUNT:
+		lines.append("-P,%2d, 0,0, 0, 0,x" % i)
+	return "\n".join(lines)
 
 
 ## MESSAGES.TXT 1100-1140's own screen: twelve bindings and a restore row.

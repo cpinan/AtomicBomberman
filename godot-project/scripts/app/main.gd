@@ -464,10 +464,16 @@ func _open_menu(at: int = Screens_.Screen.TITLE) -> void:
 		champion = keep_match.champion_slot
 		champion_team = keep_match.champion_team
 		teams = keep_match.team_play
+	var previous_menu := menu
 	_teardown()
 	mode = Mode.MENU
 	menu = Menu_.new()
 	menu.setup(pack.scheme_names() if pack != null and pack.loaded else [])
+	# A fresh Menu_ resets every option to its VALUELST default — carry the
+	# player's own picks forward so returning here (after a match, or however
+	# else this is reached) does not throw them away. docs/BUGS.md-worthy: this
+	# is the in-session half only; nothing here yet survives an app restart.
+	menu.apply_options_from(previous_menu)
 	# Which slots may be JOY depends on what is plugged in right now.
 	menu.pads_available = Pads_.connected().size()
 	menu.set_campaigns(pack.campaign_names() if pack != null and pack.loaded

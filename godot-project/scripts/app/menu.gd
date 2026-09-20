@@ -211,6 +211,39 @@ func setup(available: Array = []) -> void:
 	refusal = ""
 
 
+## Carry a player's option picks forward into a freshly `setup()` menu.
+##
+## `main.gd`'s `_open_menu()` replaces `menu` with a new `Menu_` every time it
+## runs — on startup, but also every trip back from a match — and `setup()`
+## resets every option to its VALUELST default. Without this, a player's
+## scheme, level, win count, team play and every other option-screen choice
+## was silently thrown away the moment a round ended, which read as "options
+## are not saved, the selection is always lost." This is the in-memory half
+## of that fix — it does not survive an app restart, only a return to the
+## menu within one session. `scheme_index`/`level` are clamped rather than
+## copied outright since the new menu's lists may be shorter (a scheme file
+## could vanish between matches; a level index cannot).
+func apply_options_from(old) -> void:
+	if old == null:
+		return
+	scheme_index = clampi(old.scheme_index, 0, scheme_names.size() - 1)
+	level = clampi(old.level, LEVEL_RANDOM, level_count() - 1)
+	play_time_index = old.play_time_index
+	wins = old.wins
+	win_by_kills = old.win_by_kills
+	random_start = old.random_start
+	team_play = old.team_play
+	enclose_depth = old.enclose_depth
+	conveyor_index = old.conveyor_index
+	stomped_detonate = old.stomped_detonate
+	diseases_destroyable = old.diseases_destroyable
+	no_music = old.no_music
+	gold_bomberman = old.gold_bomberman
+	campaign = old.campaign
+	slots = old.slots.duplicate()
+	slot_team = old.slot_team.duplicate()
+
+
 func item_count() -> int:
 	return Item.size()
 

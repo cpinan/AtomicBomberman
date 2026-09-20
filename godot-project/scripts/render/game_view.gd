@@ -619,7 +619,15 @@ func draw_bombs_of(on: CanvasItem, slot: int) -> void:
 		# A BOMB IN THE AIR is its own animation — PUNBOMB1..4, one file per
 		# direction, ten frames of it tumbling. Punched bombs used to slide
 		# through the air on the standing frame.
-		if b.flying:
+		#
+		# PUNBOMB has one tumble per direction shared by every bomb kind — the
+		# disc has no jelly-specific flight art (checked: each punbombN sheet
+		# holds exactly one "punch <dir>" sequence). Using it for a jelly bomb
+		# mid-arc makes it look like a plain thrown bomb until it lands, which
+		# is the one moment jelly's own identity (the BOMBS.ANI wobble) drops
+		# out. So a jelly bomb keeps its own look through the whole arc instead
+		# of borrowing the generic tumble.
+		if b.flying and not b.jelly_bounce:
 			var sheet := "punbomb%d" % _punbomb_sheet(b.move_dir)
 			var seq := "punch %s" % _compass(b.move_dir)
 			if pack.has_sequence(sheet, seq):

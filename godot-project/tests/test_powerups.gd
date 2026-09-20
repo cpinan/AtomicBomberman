@@ -22,9 +22,11 @@ func _init() -> void:
 	_test_caps(t)
 	_test_stat_effects(t)
 	_test_trigger_exclusion(t)
+	_test_grab_spooge_exclusion(t)
 	_test_random(t)
 	_test_diseases(t)
 	_test_repopulate(t)
+	_test_every_powerup_effect(t)
 	quit(t.finish())
 
 
@@ -176,29 +178,39 @@ func _test_stat_effects(t: T_) -> void:
 			Types_.PowerUp.JELLY: t.ok(p2.jelly_bombs, "jelly grants bouncing")
 
 
-# Trigger is exclusive with spooge and punch, and taking it drops both.
-# AtomBomberman's notes: "you can have oil+punch, but you cant have trigger+oil
-# or trigger+punch / if you have oil+punch and you pick-up trigger, you will
-# drop oil AND punch".
+# Trigger is exclusive with JELLY and PUNCH, and taking it drops both —
+# MANUAL.BM's own exclusivity table: "Trigger will drop Jelly and Boxing
+# Glove. Jelly will drop Trigger. Boxing Glove will drop Trigger." Grab and
+# Spooge are a separate, unrelated exclusive pair (below) — not trigger/spooge,
+# which an earlier reading of the port had backwards.
 func _test_trigger_exclusion(t: T_) -> void:
 	var sim := _sim(1, 0)
 	var p: Player_ = sim.players[0]
 
-	sim.give_powerup(p, Types_.PowerUp.SPOOGE)
+	sim.give_powerup(p, Types_.PowerUp.JELLY)
 	sim.give_powerup(p, Types_.PowerUp.PUNCH)
-	t.ok(p.can_spooge and p.can_punch, "spooge and punch coexist")
+	t.ok(p.jelly_bombs and p.can_punch, "jelly and punch coexist")
 
 	sim.give_powerup(p, Types_.PowerUp.TRIGGER)
-	t.ok(not p.can_spooge, "taking trigger drops spooge")
+	t.ok(not p.jelly_bombs, "taking trigger drops jelly")
 	t.ok(not p.can_punch, "taking trigger drops punch")
 	t.ok(p.trigger_bombs > 0, "and grants trigger bombs")
-	t.eq(p.collected[Types_.PowerUp.SPOOGE], 0, "spooge is uncollected")
+	t.eq(p.collected[Types_.PowerUp.JELLY], 0, "jelly is uncollected")
 	t.eq(p.collected[Types_.PowerUp.PUNCH], 0, "punch is uncollected")
 
 	# And the reverse: taking punch drops trigger.
 	sim.give_powerup(p, Types_.PowerUp.PUNCH)
 	t.ok(p.can_punch, "punch applies again")
 	t.eq(p.trigger_bombs, 0, "taking punch drops the trigger stock")
+
+	# Jelly also drops trigger, same as punch does.
+	var s3 := _sim(1, 0)
+	var p3: Player_ = s3.players[0]
+	s3.give_powerup(p3, Types_.PowerUp.TRIGGER)
+	s3.give_powerup(p3, Types_.PowerUp.JELLY)
+	t.ok(p3.jelly_bombs, "jelly applies")
+	t.eq(p3.trigger_bombs, 0, "taking jelly drops the trigger stock")
+	t.eq(p3.collected[Types_.PowerUp.TRIGGER], 0, "trigger is uncollected")
 
 	# A second trigger tops the stock up rather than replacing it.
 	var s2 := _sim(1, 0)
@@ -208,6 +220,26 @@ func _test_trigger_exclusion(t: T_) -> void:
 	p2.collected[Types_.PowerUp.TRIGGER] = 0     # clear the cap to allow another
 	s2.give_powerup(p2, Types_.PowerUp.TRIGGER)
 	t.ok(p2.trigger_bombs > first, "a second trigger tops the stock up")
+
+
+# Grab and Spooge are their own exclusive pair, separate from Trigger —
+# MANUAL.BM: "Blue Hand will drop Spooge. Spooge will drop Blue Hand."
+func _test_grab_spooge_exclusion(t: T_) -> void:
+	var sim := _sim(1, 0)
+	var p: Player_ = sim.players[0]
+
+	sim.give_powerup(p, Types_.PowerUp.GRAB)
+	t.ok(p.can_grab, "grab applies")
+
+	sim.give_powerup(p, Types_.PowerUp.SPOOGE)
+	t.ok(p.can_spooge, "spooge applies")
+	t.ok(not p.can_grab, "taking spooge drops grab")
+	t.eq(p.collected[Types_.PowerUp.GRAB], 0, "grab is uncollected")
+
+	sim.give_powerup(p, Types_.PowerUp.GRAB)
+	t.ok(p.can_grab, "grab applies again")
+	t.ok(not p.can_spooge, "taking grab drops spooge")
+	t.eq(p.collected[Types_.PowerUp.SPOOGE], 0, "spooge is uncollected")
 
 
 func _test_random(t: T_) -> void:
@@ -274,6 +306,22 @@ func _test_diseases(t: T_) -> void:
 	t.ok(p2.speed < base, "molasses slows the player")
 	s2.cure_all(p2)
 	t.eq(p2.speed, base, "and curing restores the speed")
+
+	# SUPER_BAD_DISEASE — MANUAL.BM: "Gives you up to three (3) diseases
+	# simultaneously," not the single disease DISEASE gives.
+	var counts := {}
+	for seed_value in 30:
+		var s3 := _sim(1, seed_value)
+		var p3: Player_ = s3.players[0]
+		s3.give_powerup(p3, Types_.PowerUp.SUPER_BAD_DISEASE)
+		var n := 0
+		for d in Types_.SUPER_BAD_DISEASES:
+			if p3.has_disease(d):
+				n += 1
+		counts[n] = true
+		t.ok(n >= 1 and n <= 3, "one pickup gives 1 to 3 diseases, got %d" % n)
+	t.ok(counts.size() > 1 or counts.has(3),
+		"[invariant] some pickups give more than one disease")
 
 	# Crack speeds up.
 	var s3 := _sim(1, 0)
@@ -371,3 +419,141 @@ func _sim(count: int, density: int = 0, round_seed: int = 1,
 	var sim: Sim_ = Sim_.new()
 	sim.setup(s, slots, round_seed)
 	return sim
+
+
+## One block per powerup, each on its own fresh sim, asserting the concrete
+## gameplay EFFECT that MANUAL.BM promises — not just that `collected[]` went
+## up. Existing tests above already cover placement/caps/exclusion in depth;
+## this is the "does picking it up actually do the thing" sweep across all
+## thirteen, in enum order.
+func _test_every_powerup_effect(t: T_) -> void:
+	# BOMB — MANUAL.BM: "Allows you to drop an additional bomb."
+	var s_bomb := _sim(1, 0)
+	var p_bomb: Player_ = s_bomb.players[0]
+	var total0 := p_bomb.bombs_total
+	var avail0 := p_bomb.bombs_available
+	s_bomb.give_powerup(p_bomb, Types_.PowerUp.BOMB)
+	t.eq(p_bomb.bombs_total, total0 + 1, "BOMB: one more bomb in total")
+	t.eq(p_bomb.bombs_available, avail0 + 1, "BOMB: one more available right now")
+
+	# FLAME — MANUAL.BM: "Allows your flame to shoot further."
+	var s_flame := _sim(1, 0)
+	var p_flame: Player_ = s_flame.players[0]
+	var len0 := p_flame.flame_len
+	s_flame.give_powerup(p_flame, Types_.PowerUp.FLAME)
+	t.eq(p_flame.flame_len, len0 + 1, "FLAME: blast radius grows by one cell")
+
+	# DISEASE — MANUAL.BM: "Gives you one random disease."
+	var s_disease := _sim(1, 0)
+	var p_disease: Player_ = s_disease.players[0]
+	t.ok(not p_disease.any_disease(), "DISEASE: clean before the pickup")
+	s_disease.give_powerup(p_disease, Types_.PowerUp.DISEASE)
+	t.ok(p_disease.any_disease(), "DISEASE: sick after the pickup")
+
+	# KICK — MANUAL.BM: "Allows you to kick any bomb down a hallway."
+	var s_kick := _sim(1, 0)
+	var p_kick: Player_ = s_kick.players[0]
+	p_kick.place_at_tile_centre(2, 5)
+	p_kick.facing = Types_.Dir.RIGHT
+	var b_kick := s_kick.place_bomb(p_kick)
+	b_kick.place_at_tile_centre(3, 5)
+	t.ok(not s_kick.kick_bomb(p_kick), "KICK: without it, walking in does nothing")
+	s_kick.give_powerup(p_kick, Types_.PowerUp.KICK)
+	t.ok(s_kick.kick_bomb(p_kick), "KICK: with it, the adjacent bomb moves")
+	t.eq(b_kick.move_dir, Types_.Dir.RIGHT, "KICK: rolling the way the player faced")
+
+	# SKATE — MANUAL.BM: "Speed Boost. Allows you to run faster." Additive,
+	# not multiplicative — ORACLE row 3.
+	var s_skate := _sim(1, 0)
+	var p_skate: Player_ = s_skate.players[0]
+	var speed0 := p_skate.speed
+	s_skate.give_powerup(p_skate, Types_.PowerUp.SKATE)
+	t.eq(p_skate.speed, speed0 + Values_.V[Const_.Res.SKATE_BONUS],
+		"SKATE: speed goes up by exactly the skate bonus")
+
+	# PUNCH — MANUAL.BM: "Allows you to punch any bomb."
+	var s_punch := _sim(1, 0)
+	var p_punch: Player_ = s_punch.players[0]
+	p_punch.place_at_tile_centre(2, 5)
+	p_punch.facing = Types_.Dir.RIGHT
+	var b_punch := s_punch.place_bomb(p_punch)
+	b_punch.place_at_tile_centre(3, 5)
+	t.ok(not s_punch.punch_bomb(p_punch), "PUNCH: without the glove, nothing")
+	s_punch.give_powerup(p_punch, Types_.PowerUp.PUNCH)
+	t.ok(s_punch.punch_bomb(p_punch), "PUNCH: with it, the bomb takes off")
+	t.ok(b_punch.flying, "PUNCH: airborne")
+
+	# GRAB — MANUAL.BM: "Allows you to pick up (grab), carry, and throw your
+	# bombs."
+	var s_grab := _sim(1, 0)
+	var p_grab: Player_ = s_grab.players[0]
+	p_grab.place_at_tile_centre(5, 5)
+	var b_grab := s_grab.place_bomb(p_grab)
+	t.ok(not s_grab.grab_bomb(p_grab), "GRAB: without the hand, can't pick up")
+	s_grab.give_powerup(p_grab, Types_.PowerUp.GRAB)
+	t.ok(s_grab.grab_bomb(p_grab), "GRAB: with it, the bomb is picked up")
+	t.eq(b_grab.carried_by, p_grab.slot, "GRAB: and is now carried")
+
+	# SPOOGE — MANUAL.BM: "Lays down ALL of your bombs at once."
+	var s_spooge := _sim(1, 0)
+	var p_spooge: Player_ = s_spooge.players[0]
+	p_spooge.place_at_tile_centre(5, 5)
+	p_spooge.facing = Types_.Dir.RIGHT
+	for _i in 3:
+		s_spooge.give_powerup(p_spooge, Types_.PowerUp.BOMB)
+	var available0 := p_spooge.bombs_available
+	t.eq(s_spooge.spooge(p_spooge), 0, "SPOOGE: without it, lays nothing")
+	s_spooge.give_powerup(p_spooge, Types_.PowerUp.SPOOGE)
+	var placed := s_spooge.spooge(p_spooge)
+	t.eq(placed, available0, "SPOOGE: with it, every available bomb drops at once")
+	t.eq(p_spooge.bombs_available, 0, "SPOOGE: none left in hand afterward")
+
+	# GOLDFLAME — MANUAL.BM: "Max Flamelength. Gives your explosions MAXIMUM
+	# range."
+	var s_gold := _sim(1, 0)
+	var p_gold: Player_ = s_gold.players[0]
+	s_gold.give_powerup(p_gold, Types_.PowerUp.GOLDFLAME)
+	t.eq(p_gold.flame_len, Values_.V[Const_.Res.CAP_BASE + Types_.PowerUp.FLAME],
+		"GOLDFLAME: straight to the flame cap")
+
+	# TRIGGER — MANUAL.BM: "Allows you to precisely control when your bomb
+	# detonates."
+	var s_trig := _sim(1, 0)
+	var p_trig: Player_ = s_trig.players[0]
+	p_trig.place_at_tile_centre(5, 5)
+	s_trig.give_powerup(p_trig, Types_.PowerUp.TRIGGER)
+	t.ok(p_trig.trigger_bombs > 0, "TRIGGER: stock granted")
+	var b_trig := s_trig.place_bomb(p_trig)
+	t.ok(b_trig.triggered, "TRIGGER: the bomb placed waits for a press")
+	t.eq(s_trig.trigger_bombs(p_trig), 1, "TRIGGER: pressing detonates it")
+	t.ok(b_trig.detonated, "TRIGGER: and it goes off")
+
+	# JELLY — MANUAL.BM: "Turns your bombs into Jelly (bouncy)." Bounce
+	# mechanics themselves are test_abilities.gd's `_test_jelly`; this only
+	# checks the powerup grants the flag a kick then reads.
+	var s_jelly := _sim(1, 0)
+	var p_jelly: Player_ = s_jelly.players[0]
+	p_jelly.place_at_tile_centre(2, 5)
+	p_jelly.facing = Types_.Dir.RIGHT
+	s_jelly.give_powerup(p_jelly, Types_.PowerUp.KICK)
+	var b_jelly := s_jelly.place_bomb(p_jelly)
+	b_jelly.place_at_tile_centre(3, 5)
+	s_jelly.kick_bomb(p_jelly)
+	t.ok(not b_jelly.jelly_bounce, "JELLY: a plain kicked bomb doesn't bounce")
+	s_jelly.give_powerup(p_jelly, Types_.PowerUp.JELLY)
+	t.ok(p_jelly.jelly_bombs, "JELLY: flag granted")
+
+	# SUPER_BAD_DISEASE — covered in depth in _test_diseases (1-to-3 diseases
+	# per MANUAL.BM). One line here for the sweep's own completeness.
+	var s_bad := _sim(1, 0)
+	var p_bad: Player_ = s_bad.players[0]
+	s_bad.give_powerup(p_bad, Types_.PowerUp.SUPER_BAD_DISEASE)
+	t.ok(p_bad.any_disease(), "SUPER_BAD_DISEASE: at least one disease lands")
+
+	# RANDOM — covered in depth in _test_random (never resolves to itself).
+	# One line here for the sweep's own completeness.
+	var s_rand := _sim(1, 0)
+	var p_rand: Player_ = s_rand.players[0]
+	s_rand.give_powerup(p_rand, Types_.PowerUp.RANDOM)
+	t.ok(p_rand.collected[Types_.PowerUp.RANDOM] == 0,
+		"RANDOM: never resolves to itself, so its own slot stays uncollected")

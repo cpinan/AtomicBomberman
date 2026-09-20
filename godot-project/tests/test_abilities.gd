@@ -151,6 +151,15 @@ func _test_jelly(t: T_) -> void:
 			break
 	t.ok(bounced, "a jelly bomb bounces off the wall instead of stopping")
 	t.eq(b.state, Types_.BombState.WOBBLE, "and goes into its wobble state")
+	# The bounce must SNAP to the cell it bounced off of. Before this was
+	# fixed, the half-cell lookahead let the bomb creep right up to the wall
+	# and reverse direction from wherever it happened to be, so the sprite
+	# visibly sat into the wall for a tick — "goes off the walls then bounces
+	# back," from a live playtest.
+	t.eq(b.x % Bomb_.TILE_W_CP, Bomb_.TILE_W_CP / 2,
+		"the bounce leaves the bomb cell-centred on X")
+	t.eq(b.y % Bomb_.TILE_H_CP, Bomb_.TILE_H_CP / 2,
+		"the bounce leaves the bomb cell-centred on Y")
 
 	# Resource 667 is the 1-in-3 chance of a crazy turn at an intersection.
 	t.eq(Values_.V[Const_.Res.JELLY_TURN_CHANCE], 3,
@@ -251,6 +260,23 @@ func _test_punch(t: T_) -> void:
 			break
 	t.ok(b5.tile_x() != blocker.tile_x() or b5.tile_y() != blocker.tile_y(),
 		"[invariant] two bombs never end up on the same cell")
+
+	# A punch with NOWHERE to go at all — the very next cell is already
+	# blocked — must fail outright rather than play the animation and sound
+	# over a zero-distance flight. A live playtest read this as "the glove
+	# doesn't work": the punch anim fired but the bomb never visibly moved.
+	var s6 := _sim(1)
+	var p6: Player_ = s6.players[0]
+	p6.place_at_tile_centre(2, 5)
+	p6.facing = Types_.Dir.RIGHT
+	s6.give_powerup(p6, Types_.PowerUp.PUNCH)
+	var b6 := s6.place_bomb(p6)
+	b6.place_at_tile_centre(3, 5)
+	s6.field.brick[Field_.idx(4, 5)] = Types_.Brick.SOLID
+	t.ok(not s6.punch_bomb(p6),
+		"a punch with the very next cell blocked fails outright")
+	t.ok(not b6.flying, "and never takes off")
+	t.eq(b6.tile_x(), 3, "staying exactly where it was")
 
 
 func _test_grab_and_throw(t: T_) -> void:

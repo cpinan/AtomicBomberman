@@ -160,8 +160,16 @@ var death_anim: int = 0
 ## for the same replay-determinism reason as `death_anim` — and, matching
 ## that field's own existing gap, not yet in `to_bytes()`/`state_hash()`; a
 ## joining client does not see either one correctly today.
+##
+## The disassembled original re-rolls a fresh random variant every span for as
+## long as the player stays boxed in, which reads as "plays every animation in
+## a row" rather than one. This port picks once per trapped episode instead —
+## `cornered` below is what remembers "already rolled for this episode" so the
+## geometric re-trigger in `_check_cornerhead()` does not reroll until the
+## player escapes and gets boxed in again.
 var cornerhead: int = 0
 var cornerhead_ticks: int = 0
+var cornered: bool = false
 
 
 func _init() -> void:
