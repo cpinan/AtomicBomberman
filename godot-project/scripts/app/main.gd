@@ -206,6 +206,19 @@ var view: Node2D = null
 var menu: Menu_ = null
 var menu_view: Node2D = null
 
+## The last menu's option picks, kept alive across `_teardown()`.
+##
+## `_start_from_menu()` tears the menu down before the match it configures
+## even begins — `menu` is null for the whole game, not just after it — so by
+## the time `_open_menu()` next runs (on Escape mid-game, or normally when the
+## match ends), `menu` is already null and `apply_options_from(menu)` had
+## nothing to copy from. Every option was silently reset on every single
+## match, not just some: a live playtest report, "options are not saved, the
+## selection is always lost." `tests/test_start.gd`'s
+## `_test_options_survive_a_match` reproduced it end to end through the real
+## `_open_menu()` path before this existed.
+var _last_menu: Menu_ = null
+
 
 ## The screen flow — title, main menu, setup, options, results, victory. Mode
 ## MENU means "a screen is up", whichever one; `screens.screen` says which.
@@ -464,8 +477,12 @@ func _open_menu(at: int = Screens_.Screen.TITLE) -> void:
 		champion = keep_match.champion_slot
 		champion_team = keep_match.champion_team
 		teams = keep_match.team_play
-	var previous_menu := menu
 	_teardown()
+	# `_teardown()` just stashed whichever of `menu` or an already-null `menu`
+	# (a match already tore it down before this call) was live into
+	# `_last_menu` — that is the actual source of truth for what the player
+	# picked, not the now-null `menu`.
+	var previous_menu := _last_menu
 	mode = Mode.MENU
 	menu = Menu_.new()
 	menu.setup(pack.scheme_names() if pack != null and pack.loaded else [])
@@ -516,6 +533,13 @@ func _open_menu(at: int = Screens_.Screen.TITLE) -> void:
 ## Drop the running game, whatever kind it was. Called before opening the menu
 ## and before starting anything from it.
 func _teardown() -> void:
+	# Stashed before it is nulled below, so whichever `_open_menu()` comes
+	# after this — win, loss, Escape mid-game, a joined net game — has the
+	# player's own picks to restore instead of VALUELST defaults. This is the
+	# ONLY place `menu` is ever nulled, so it is the one place that needs to
+	# remember it first.
+	if menu != null:
+		_last_menu = menu
 	# The menu is not gameplay, and MESSAGES.TXT 263 says "during gameplay".
 	if music != null:
 		music.stop()

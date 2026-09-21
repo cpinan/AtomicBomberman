@@ -862,6 +862,14 @@ func draw_player_of(on: CanvasItem, slot: int) -> void:
 				and p.has_disease(Types_.Disease.INVISIBLE):
 			continue
 		var pos := _player_pos(p)
+		# SICK: no original art marks a diseased player at all — checked the
+		# whole pack, the only disease-related art is the powerup's own pickup
+		# icon. A live playtest asked for some feedback ("I do not see the
+		# debuff"), so this invents one: a slow tint pulse toward a sickly
+		# green while any disease is active, applied to the normal standing/
+		# walking/kicking/punching/carrying frames below. Not restored from
+		# the original — there is nothing to restore.
+		var tint := _disease_tint(p)
 		# DYING: one of the disc's own 24 death animations, played once from
 		# the tick of death rather than cycled. The seventeen XPLODE files hold
 		# them — "die green 1" to "die green 24", which is what VALUELST 105's
@@ -898,7 +906,7 @@ func draw_player_of(on: CanvasItem, slot: int) -> void:
 			var kick_seq := "kick %s" % _compass(p.facing)
 			if pack.has_sequence("kick", kick_seq):
 				_draw_seq_frame("kick", kick_seq, pos,
-					Sim_.KICK_ANIM_TICKS - p.kick_ticks, true, Color.WHITE,
+					Sim_.KICK_ANIM_TICKS - p.kick_ticks, true, tint,
 					on, true)
 				continue
 
@@ -909,7 +917,7 @@ func draw_player_of(on: CanvasItem, slot: int) -> void:
 			var punch_seq := "punch %s green" % _compass(p.facing)
 			if pack.has_sequence("punch", punch_seq):
 				_draw_seq_frame("punch", punch_seq, pos,
-					Sim_.PUNCH_ANIM_TICKS - p.punch_ticks, true, Color.WHITE,
+					Sim_.PUNCH_ANIM_TICKS - p.punch_ticks, true, tint,
 					on, true)
 				continue
 
@@ -921,7 +929,7 @@ func draw_player_of(on: CanvasItem, slot: int) -> void:
 			if pack.has_sequence("bpickup", pick_seq):
 				var pause: int = int(Values_.V[Const_.Res.PICKUP_PAUSE_FRAMES])
 				_draw_seq_frame("bpickup", pick_seq, pos,
-					pause - p.pickup_pause, true, Color.WHITE, on, true)
+					pause - p.pickup_pause, true, tint, on, true)
 				continue
 
 		# CARRYING ONE: BOMBWALK.ANI is the player with a bomb over its head,
@@ -933,7 +941,7 @@ func draw_player_of(on: CanvasItem, slot: int) -> void:
 			var carry_seq := "bombwalk %s green" % _compass(p.facing)
 			if pack.has_sequence("bombwalk", carry_seq):
 				_draw_seq_frame("bombwalk", carry_seq, pos, sim.tick_count,
-					true, Color.WHITE, on, true)
+					true, tint, on, true)
 				continue
 
 		var sheet := "walk" if p.move != Types_.MoveState.STILL else "stand"
@@ -942,8 +950,26 @@ func draw_player_of(on: CanvasItem, slot: int) -> void:
 			continue
 		var seq := _player_sequence(sheet, p)
 		# Walk cycles with the tick so the legs move; standing is one frame.
-		_draw_seq_frame(sheet, seq, pos, sim.tick_count, true, Color.WHITE,
+		_draw_seq_frame(sheet, seq, pos, sim.tick_count, true, tint,
 			on, true)
+
+
+## A slow pulse toward sickly green while any disease is active, plain white
+## otherwise. Invented — see the "SICK" comment above draw_player_of()'s own
+## use of this; there is no original art to restore for a disease state.
+## Ten ticks (half a second at 20 Hz) each way, so it reads as a pulse, not a
+## flicker fast enough to be mistaken for a rendering glitch.
+const DISEASE_TINT := Color(0.55, 1.0, 0.45)
+const DISEASE_PULSE_TICKS := 10
+
+func _disease_tint(p: Player_) -> Color:
+	if not p.any_disease():
+		return Color.WHITE
+	var phase := sim.tick_count % (DISEASE_PULSE_TICKS * 2)
+	var f := float(phase) / float(DISEASE_PULSE_TICKS)
+	if f > 1.0:
+		f = 2.0 - f
+	return Color.WHITE.lerp(DISEASE_TINT, f)
 
 
 ## Is this player holding a bomb? The bomb knows, so this asks it.

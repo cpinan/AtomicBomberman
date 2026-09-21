@@ -28,6 +28,7 @@ func _init() -> void:
 	await _test_settings_reach_the_sim(t)
 	await _test_refusal_does_not_start(t)
 	await _test_escape_comes_back(t)
+	await _test_options_survive_a_match(t)
 	quit(t.finish())
 
 
@@ -215,6 +216,41 @@ func _test_escape_comes_back(t: T_) -> void:
 	main._start_from_menu()
 	await process_frame
 	t.eq(main.mode, Main.Mode.LOCAL, "and start another game")
+	main.free()
+
+
+## A live playtest report: "options are not saved, the selection is always
+## lost" — a fresh Menu_ was being built on every return to the menu, which
+## reset every option to its VALUELST default. Menu_.apply_options_from()
+## fixed it; this proves it through the real `_open_menu()` path a player
+## actually takes (start a match, come back), not just by calling the model
+## method directly.
+func _test_options_survive_a_match(t: T_) -> void:
+	var main := await _boot()
+	var picked_scheme: int = main.menu.scheme_names.size() - 1
+	main.menu.scheme_index = picked_scheme
+	main.menu.wins = 7
+	main.menu.win_by_kills = true
+	main.menu.team_play = true
+	main.menu.random_start = not main.menu.random_start
+	main.menu.play_time_index = 0
+	main.menu.no_music = true
+	main.menu.cursor = Menu_.Item.START
+	main.menu.activate()
+	main._start_from_menu()
+	await process_frame
+	t.eq(main.mode, Main.Mode.LOCAL, "a game is running")
+
+	main._open_menu()
+	await process_frame
+	t.eq(main.mode, Main.Mode.MENU, "back at the menu")
+	t.eq(main.menu.scheme_index, picked_scheme,
+		"[invariant] scheme choice survives a played match")
+	t.eq(main.menu.wins, 7, "[invariant] win count survives")
+	t.ok(main.menu.win_by_kills, "[invariant] win-by-kills survives")
+	t.ok(main.menu.team_play, "[invariant] team play survives")
+	t.eq(main.menu.play_time_index, 0, "[invariant] play time survives")
+	t.ok(main.menu.no_music, "[invariant] the music toggle survives")
 	main.free()
 
 

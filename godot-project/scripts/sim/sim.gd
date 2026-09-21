@@ -1827,11 +1827,17 @@ func grab_bomb(p: Player_) -> bool:
 			continue
 		b.carried_by = p.slot
 		b.move_dir = Types_.Dir.NONE
-		# Only a grab that happened WHILE the button was already held asks to
-		# keep being held — see Bomb_.hold_required_to_carry. A grab reached
-		# by any other path (this function called directly, a bot, a tap
-		# already released again) carries indefinitely as it always has.
-		b.hold_required_to_carry = p.action_first_held
+		# A tap grabs and keeps carrying until thrown — the same one-press
+		# feel as every other action in the game (drop, kick, punch). This
+		# used to require the button held down continuously, per MANUAL.BM's
+		# literal wording ("holding down the Drop Bomb button"); a real
+		# player's tap always has the key down at the instant the edge fires,
+		# so every grab through actual input became hold-required and dropped
+		# itself again within one tick of a normal release — read live as
+		# "the gauntlet does nothing." Deviating from the manual here on
+		# purpose: docs/BUGS.md-worthy, the manual's own release behavior was
+		# never disassembly-verified to begin with (see throw_bomb()'s doc).
+		b.hold_required_to_carry = false
 		p.pickup_pause = Values_.V[Const_.Res.PICKUP_PAUSE_FRAMES]
 		_play(p.slot, Types_.SoundEffect.BOMB_GRAB)
 		return true

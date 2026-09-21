@@ -25,7 +25,7 @@ func _init() -> void:
 	_test_jelly(t)
 	_test_punch(t)
 	_test_grab_and_throw(t)
-	_test_hold_to_carry(t)
+	_test_grab_is_tap_not_hold(t)
 	_test_spooge(t)
 	_test_trigger(t)
 	_test_bomb_diseases(t)
@@ -336,12 +336,20 @@ func _test_grab_and_throw(t: T_) -> void:
 	t.eq(b2.carried_by, -1, "a dead carrier drops the bomb")
 
 
-## MANUAL.BM: "you may carry a bomb by grabbing and holding down the Drop
-## Bomb button." Driven through set_input()/tick() rather than calling
-## grab_bomb()/throw_bomb() directly, because the hold-vs-release logic lives
-## in the per-tick dispatch (_check_hold_to_carry()), not in those functions
-## themselves.
-func _test_hold_to_carry(t: T_) -> void:
+## A single tap grabs and keeps carrying until thrown — the same one-press
+## feel as every other action (drop, kick, punch). This USED to require
+## holding the button down continuously, per MANUAL.BM's literal wording
+## ("holding down the Drop Bomb button") — but a real key press always has
+## the key down at the instant its edge fires, so every real grab became
+## hold-required and dropped itself again one tick after a normal release,
+## which read live as "the gauntlet does nothing" (a repeated playtest
+## report). Deviating from the manual on purpose here: docs/BUGS.md-worthy,
+## its release behavior was never disassembly-verified to begin with.
+##
+## Driven through set_input()/tick() rather than calling
+## grab_bomb()/throw_bomb() directly, so this exercises the real dispatch
+## path a player's keypresses actually take.
+func _test_grab_is_tap_not_hold(t: T_) -> void:
 	var sim := _sim(1)
 	var p: Player_ = sim.players[0]
 	p.place_at_tile_centre(5, 5)
@@ -353,40 +361,28 @@ func _test_hold_to_carry(t: T_) -> void:
 	# grab, the same way a human out of bombs would see it.
 	t.eq(p.bombs_available, 0, "the starting bomb is spent")
 
-	# Grab: an edge, held true the same tick (the key is still down the
-	# instant it was pressed).
+	# Grab: a single tap, key released again on the very next tick.
 	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.FIRST, true)
 	sim.tick()
 	t.eq(b.carried_by, p.slot, "the grab picks it up")
-
-	# Holding, tick after tick, with no new edge: still carried.
-	for _i in 10:
-		sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.NONE,
-			true)
-		sim.tick()
-	t.eq(b.carried_by, p.slot, "holding keeps it carried across many ticks")
-	t.ok(not b.flying, "and it never left the hand")
-
-	# Release, with no new press: dropped in place, not thrown.
 	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.NONE, false)
 	sim.tick()
-	t.eq(b.carried_by, -1, "releasing ends the carry")
-	t.ok(not b.flying, "it is set down, not thrown")
-	t.eq(b.tile_x(), p.tile_x(), "on the carrier's own cell")
-	t.eq(b.tile_y(), p.tile_y(), "cell-aligned")
+	t.eq(b.carried_by, p.slot, "releasing the key does NOT drop it")
 
-	# A fast release-then-repress — the edge and the still-down state arrive
-	# on the SAME tick, which is what a quick double-tap looks like at 20 Hz
-	# — throws instead, because throw_bomb() runs before the release would
-	# have been seen as a plain drop.
-	sim.give_powerup(p, Types_.PowerUp.GRAB)
+	# Ticks pass with no input at all: still carried, indefinitely.
+	for _i in 10:
+		sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.NONE,
+			false)
+		sim.tick()
+	t.eq(b.carried_by, p.slot, "carried across many ticks with no key down")
+	t.ok(not b.flying, "and it never left the hand")
+
+	# A second tap while carrying throws it — flying, the same arc a punch
+	# uses, which is what clears a wall a rolled bomb could not.
 	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.FIRST, true)
 	sim.tick()
-	t.eq(b.carried_by, p.slot, "grabbed again for the fast-tap case")
-	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.FIRST, true)
-	sim.tick()
-	t.eq(b.carried_by, -1, "a fast tap while still carrying throws")
-	t.ok(b.flying, "not merely dropped")
+	t.eq(b.carried_by, -1, "a second tap throws rather than dropping")
+	t.ok(b.flying, "and it is airborne, not just set down")
 
 
 func _test_spooge(t: T_) -> void:
