@@ -1758,6 +1758,20 @@ func _bomb_blocked(b: Bomb_, tx: int, ty: int, for_landing: bool = false) -> boo
 	var other := bomb_at(tx, ty)
 	if other != null and other != b:
 		return true
+	# A BOMB ALREADY IN THE AIR HEADING HERE counts as occupying the cell.
+	#
+	# bomb_at() deliberately ignores a flying bomb — that is what lets a player
+	# walk under one — so a landing search could not see a bomb that was
+	# airborne and aimed at the same cell. Throw or punch two bombs at the same
+	# spot and both were cleared to land on it, and they came to rest stacked:
+	# "the bombs overlap instead of continuing to the next free space", from a
+	# live playtest. Each one has to see the other's destination.
+	for flier in bombs:
+		if flier == b or flier.detonated or not flier.flying:
+			continue
+		if flier.fly_to_x / Bomb_.TILE_W_CP == tx \
+				and flier.fly_to_y / Bomb_.TILE_H_CP == ty:
+			return true
 	if for_landing:
 		return false
 	for p in players:
@@ -1776,6 +1790,10 @@ func _fly_bomb(b: Bomb_) -> void:
 	var f: float = float(b.fly_tick) / float(maxi(1, b.fly_ticks))
 	b.x = b.fly_from_x + int((b.fly_to_x - b.fly_from_x) * f)
 	b.y = b.fly_from_y + int((b.fly_to_y - b.fly_from_y) * f)
+	# The arc is computed in unwrapped coordinates and only then brought back
+	# onto the field, so a bomb thrown off an edge crosses the boundary and
+	# reappears on the far side instead of sliding back across the arena.
+	_wrap_bomb_pos(b)
 	if b.fly_tick < b.fly_ticks:
 		return
 
@@ -1784,6 +1802,7 @@ func _fly_bomb(b: Bomb_) -> void:
 	b.flying = false
 	b.x = b.fly_to_x
 	b.y = b.fly_to_y
+	_wrap_bomb_pos(b)
 	b.place_at_tile_centre(b.tile_x(), b.tile_y())
 	_play(b.owner, Types_.SoundEffect.BOMB_THROWN)
 	_bomb_on_the_head(b)
@@ -1875,34 +1894,82 @@ func _landing_cell(b: Bomb_, from_tx: int, from_ty: int, dir: int,
 	# bomb was set down at their feet. MANUAL.BM is explicit that this is the
 	# point of both abilities — "Throw and punch your bombs over the wall to
 	# destroy your opponents."
-	var target := Vector2i(from_tx + step.x * max_dist,
-		from_ty + step.y * max_dist)
-	if Field_.in_bounds(target.x, target.y) \
-			and not _bomb_blocked(b, target.x, target.y, true):
-		return target
-
-	# Blocked where it meant to land. Carry on in the same direction to the
-	# first cell that will take it — a bomb denied its spot overshoots rather
-	# than dropping into the thing that denied it.
-	var n := max_dist + 1
-	while true:
+	# Walk outward from the intended distance until a cell will take it. The
+	# search runs in UNWRAPPED tile coordinates and tests each candidate at its
+	# WRAPPED position, returning the unwrapped one: that is what lets the
+	# flight carry the bomb off the edge of the arena and bring it back on the
+	# far side, rather than teleporting it across the screen.
+	var limit: int = max_dist + Const_.FIELD_W + Const_.FIELD_H + 2 * WRAP_MARGIN
+	for n in range(max_dist, limit + 1):
 		var tx: int = from_tx + step.x * n
 		var ty: int = from_ty + step.y * n
-		if not Field_.in_bounds(tx, ty):
-			break
-		if not _bomb_blocked(b, tx, ty, true):
+		var wx: int = _wrap_tx(tx)
+		var wy: int = _wrap_ty(ty)
+		if not Field_.in_bounds(wx, wy):
+			continue          # the margin outside the arena: fly on over it
+		if not _bomb_blocked(b, wx, wy, true):
 			return Vector2i(tx, ty)
-		n += 1
 
-	# Nothing beyond it either — the far side is solid all the way to the
-	# arena wall. Fall back toward the thrower and take the nearest cell that
-	# will have it, their own as the last resort.
+	# Every cell in the ring is taken. Fall back toward the thrower and take
+	# the nearest that will have it, their own as the last resort.
 	for back in range(max_dist - 1, 0, -1):
 		var tx: int = from_tx + step.x * back
 		var ty: int = from_ty + step.y * back
 		if Field_.in_bounds(tx, ty) and not _bomb_blocked(b, tx, ty, true):
 			return Vector2i(tx, ty)
 	return Vector2i(from_tx, from_ty)
+
+
+## THE ARENA WRAPS FOR A BOMB IN THE AIR — BM95.EXE 0x4238E1:
+##
+##     if tile_x >= field_w + 2:  x -= (field_w + 3) * cell_w
+##     if tile_x <= -2:           x += (field_w + 3) * cell_w
+##
+## and the same pair for y. A thrown or punched bomb that leaves the arena
+## comes back on the opposite side; it is not stopped by the outer wall,
+## because it is flying over it. Without this a player standing near an edge
+## and facing out had every candidate cell refused, so the throw collapsed to
+## zero distance and the bomb was set down at their feet — "you cannot throw
+## bombs from the edge", from a live playtest.
+##
+## The margin of 3 and the "two cells past the edge" trigger are the
+## original's own numbers, so a bomb spends a moment genuinely off the field
+## before reappearing rather than snapping across the instant it passes the
+## wall.
+const WRAP_MARGIN := 3
+
+static func _wrap_tx(tx: int) -> int:
+	var span: int = Const_.FIELD_W + WRAP_MARGIN
+	while tx >= Const_.FIELD_W + 2:
+		tx -= span
+	while tx <= -2:
+		tx += span
+	return tx
+
+
+static func _wrap_ty(ty: int) -> int:
+	var span: int = Const_.FIELD_H + WRAP_MARGIN
+	while ty >= Const_.FIELD_H + 2:
+		ty -= span
+	while ty <= -2:
+		ty += span
+	return ty
+
+
+## The same rule in centipixels, applied to a bomb in flight. Kept in pixel
+## space rather than going through tile_x(), which truncates toward zero and
+## would read -1 as cell 0 for a bomb left of the field.
+func _wrap_bomb_pos(b: Bomb_) -> void:
+	var span_x: int = (Const_.FIELD_W + WRAP_MARGIN) * Bomb_.TILE_W_CP
+	var span_y: int = (Const_.FIELD_H + WRAP_MARGIN) * Bomb_.TILE_H_CP
+	while b.x >= (Const_.FIELD_W + 2) * Bomb_.TILE_W_CP:
+		b.x -= span_x
+	while b.x < -2 * Bomb_.TILE_W_CP:
+		b.x += span_x
+	while b.y >= (Const_.FIELD_H + 2) * Bomb_.TILE_H_CP:
+		b.y -= span_y
+	while b.y < -2 * Bomb_.TILE_H_CP:
+		b.y += span_y
 
 
 ## Send a bomb flying to a cell. The flight time comes from the distance and
@@ -2006,7 +2073,11 @@ func punch_bomb(p: Player_) -> bool:
 	# Three cells through the air, but no further than the nearest open one —
 	# see _landing_cell(). Field bounds are one case of "not open".
 	var landing := _landing_cell(b, b.tile_x(), b.tile_y(), p.facing, 3)
-	if landing.x == b.tile_x() and landing.y == b.tile_y():
+	# Compared WRAPPED: the search returns unwrapped coordinates so the flight
+	# can leave the arena and come back, so a bomb that went all the way round
+	# and found nothing but its own cell reports a landing far off the field
+	# that is nonetheless exactly where it started.
+	if _wrap_tx(landing.x) == b.tile_x() and _wrap_ty(landing.y) == b.tile_y():
 		# Nowhere to fly to — the very next cell was already blocked. Without
 		# this the punch played its full animation and sound over a
 		# zero-distance _launch() that visibly went nowhere, which read as

@@ -47,6 +47,8 @@ func _init() -> void:
 	_test_kick_needs_somewhere_to_go(t)
 	_test_rekicking_a_rolling_bomb(t)
 	_test_jelly_turns_are_quarter_turns(t)
+	_test_thrown_bombs_never_stack(t)
+	_test_a_throw_at_the_edge_wraps(t)
 	quit(t.finish())
 
 
@@ -301,10 +303,14 @@ func _test_punch(t: T_) -> void:
 	t.eq(s6.field.brick[Field_.idx(4, 5)], Types_.Brick.SOLID,
 		"and the wall it flew over is untouched")
 
-	# A punch with genuinely nowhere to go — solid all the way to the arena
-	# edge — must still fail outright rather than play the animation and the
-	# sound over a zero-distance flight. That was a real live report ("the
-	# glove doesn't work"), and it stays fixed.
+	# A punch with genuinely nowhere to go must still fail outright rather
+	# than play the animation and the sound over a zero-distance flight. That
+	# was a real live report ("the glove doesn't work"), and it stays fixed.
+	#
+	# "Nowhere" now means the WHOLE ROW, not just the far end: the arena wraps
+	# for a bomb in the air (BM95.EXE 0x4238E1), so a wall between here and
+	# the edge is something a punch flies over and past, coming back on the
+	# other side. Only a row with no free cell at all refuses the punch.
 	var s7 := _sim(1)
 	var p7: Player_ = s7.players[0]
 	p7.place_at_tile_centre(2, 5)
@@ -312,7 +318,14 @@ func _test_punch(t: T_) -> void:
 	s7.give_powerup(p7, Types_.PowerUp.PUNCH)
 	var b7 := s7.place_bomb(p7)
 	b7.place_at_tile_centre(3, 5)
-	for x in range(4, Const_.FIELD_W):
+	# Every cell in the row solid but the bomb's own. The player's cell is
+	# walled too — they are stood in it regardless, which the sim does not
+	# re-validate — because a landing search ignores players by design
+	# (landing ON one is _bomb_on_the_head(), not an obstruction), so leaving
+	# their cell open would give the punch somewhere perfectly good to go.
+	for x in Const_.FIELD_W:
+		if x == 3:
+			continue        # the bomb's own cell
 		s7.field.brick[Field_.idx(x, 5)] = Types_.Brick.SOLID
 	t.ok(not s7.punch_bomb(p7),
 		"a punch with nowhere to land at all fails outright")
@@ -1289,3 +1302,86 @@ func _test_jelly_turns_are_quarter_turns(t: T_) -> void:
 				t.eq(pv.x * nv.x + pv.y * nv.y, 0,
 					"seed %d: every mid-roll turn is a quarter turn" % round_seed)
 			prev = bomb.move_dir
+
+
+## TWO BOMBS IN THE AIR MUST NOT LAND ON THE SAME CELL.
+##
+## bomb_at() deliberately ignores a flying bomb — that is what lets a player
+## walk under one — so a landing search could not see a bomb that was already
+## airborne and aimed at the same cell. Both were cleared to land there and
+## came to rest stacked: "the bombs overlap instead of continuing to the next
+## free space", from a live playtest.
+func _test_thrown_bombs_never_stack(t: T_) -> void:
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	p.place_at_tile_centre(2, 5)
+	p.facing = Types_.Dir.RIGHT
+	sim.give_powerup(p, Types_.PowerUp.PUNCH)
+	for _i in 4:
+		sim.give_powerup(p, Types_.PowerUp.BOMB)
+
+	# Two bombs side by side, both punched east on consecutive ticks, so the
+	# first is still in the air when the second picks its landing.
+	var a := sim.place_bomb(p)
+	a.place_at_tile_centre(3, 5)
+	t.ok(sim.punch_bomb(p), "the first is punched")
+	t.ok(a.flying, "and is in the air")
+	var b := sim.place_bomb(p)
+	b.place_at_tile_centre(3, 5)
+	t.ok(sim.punch_bomb(p), "the second is punched while it is still flying")
+
+	for _i in 80:
+		sim.tick()
+		if not a.flying and not b.flying:
+			break
+	t.ok(not a.flying and not b.flying, "both have landed")
+	t.ok(a.tile_x() != b.tile_x() or a.tile_y() != b.tile_y(),
+		"[invariant] two thrown bombs never come to rest on the same cell")
+
+
+## THE ARENA WRAPS FOR A BOMB IN THE AIR — BM95.EXE 0x4238E1:
+##
+##     if tile_x >= field_w + 2:  x -= (field_w + 3) * cell_w
+##     if tile_x <= -2:           x += (field_w + 3) * cell_w
+##
+## A thrown or punched bomb is flying OVER the outer wall, so leaving the
+## arena is not being blocked by it — the bomb comes back on the opposite
+## side. Without this every candidate cell was refused for a player near an
+## edge facing out, the throw collapsed to zero distance, and the bomb was set
+## down at their feet: "you cannot throw bombs from the edge", live.
+func _test_a_throw_at_the_edge_wraps(t: T_) -> void:
+	# Standing against the right-hand wall, facing out.
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	var edge: int = Const_.FIELD_W - 2
+	p.place_at_tile_centre(edge, 5)
+	p.facing = Types_.Dir.RIGHT
+	sim.give_powerup(p, Types_.PowerUp.GRAB)
+	var b := sim.place_bomb(p)
+	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.FIRST, true)
+	sim.tick()
+	t.eq(b.carried_by, p.slot, "the bomb is picked up at the edge")
+	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.NONE, false)
+	sim.tick()
+	t.ok(b.flying, "releasing throws it rather than dropping it")
+
+	for _i in 120:
+		sim.tick()
+		if not b.flying:
+			break
+	t.ok(not b.flying, "it lands")
+	t.ok(b.tile_x() != edge or b.tile_y() != 5,
+		"and not back at the thrower's feet")
+	t.ok(Field_.in_bounds(b.tile_x(), b.tile_y()),
+		"it comes to rest inside the arena (%d,%d)" % [b.tile_x(), b.tile_y()])
+	t.ok(b.tile_x() < edge,
+		"having wrapped round to the far side rather than stopping at the wall")
+
+	# The wrap helpers themselves, against the original's own thresholds.
+	t.eq(Sim_._wrap_tx(Const_.FIELD_W + 2), Const_.FIELD_W + 2
+		- (Const_.FIELD_W + Sim_.WRAP_MARGIN), "x wraps two cells past the edge")
+	t.eq(Sim_._wrap_tx(Const_.FIELD_W + 1), Const_.FIELD_W + 1,
+		"but not one cell past it")
+	t.eq(Sim_._wrap_ty(-2), -2 + Const_.FIELD_H + Sim_.WRAP_MARGIN,
+		"y wraps two cells before the edge")
+	t.eq(Sim_._wrap_ty(-1), -1, "but not one cell before it")

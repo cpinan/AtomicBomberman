@@ -983,10 +983,9 @@ func draw_player_of(on: CanvasItem, slot: int) -> void:
 ## likely to be carrying it. Dimming all three makes it read as a pulse on
 ## every player colour, and dimming green least keeps it reading as sickly
 ## rather than merely dark.
-const DISEASE_TINT := Color(0.45, 0.85, 0.35)
-## Six ticks each way at 20 Hz — a 0.6 s cycle, which reads as a blink. Ten
-## each way was a full second and looked more like slow breathing than a
-## warning.
+const DISEASE_TINT := Color(0.35, 0.78, 0.25)
+## Six ticks on, six off at 20 Hz — a 0.6 s cycle. Ten each way was a full
+## second and read as slow breathing rather than a warning.
 const DISEASE_PULSE_TICKS := 6
 
 ## The pulse as the shader wants it — a plain RGB multiply for one slot, white
@@ -1007,11 +1006,14 @@ func disease_tint_rgb(slot: int) -> Vector3:
 func _disease_tint(p: Player_) -> Color:
 	if not p.any_disease():
 		return Color.WHITE
-	var phase := sim.tick_count % (DISEASE_PULSE_TICKS * 2)
-	var f := float(phase) / float(DISEASE_PULSE_TICKS)
-	if f > 1.0:
-		f = 2.0 - f
-	return Color.WHITE.lerp(DISEASE_TINT, f)
+	# A SQUARE WAVE, not a ramp. The first version faded in and out linearly,
+	# which spends most of its cycle close to white and only touches full
+	# strength for an instant — measured at a mean delta of 40/255 across the
+	# sprite, and reported live as "the skull still doesn't blink". A hard
+	# alternation is unmistakable at any player colour, which is the whole job
+	# of this feedback.
+	var on: bool = (sim.tick_count / DISEASE_PULSE_TICKS) % 2 == 1
+	return DISEASE_TINT if on else Color.WHITE
 
 
 ## Is this player holding a bomb? The bomb knows, so this asks it.
