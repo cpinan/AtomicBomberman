@@ -44,13 +44,20 @@ const Const_ := preload("res://scripts/core/const.gd")
 ## held down this tick, for hold-to-carry (docs/BUGS.md, Player_.
 ## action_first_held). Snapshot.LAYOUT moves alongside this.
 ## 3 -> 4: S_SLOT_OVERRIDDEN exists — INPUT.BM's host override key.
-const VERSION := 4
+## 4 -> 5: C_START and S_LOBBY exist — a host-created room now waits in a
+## lobby (roster, no round running) until the host explicitly starts it,
+## instead of the round beginning the instant `listen()` is called. A peer
+## that joins while the room is still WAITING gets S_LOBBY instead of
+## S_WELCOME; S_WELCOME itself is unchanged and still means "the round has
+## begun, here is your slot" — it is only sent later now, for a lobby room.
+const VERSION := 5
 
 # Client -> server
 const C_HELLO := 1        ## name, protocol version
 const C_INPUT := 2        ## move state, action and held-state for this tick
 const C_HEARTBEAT := 3    ## proof the client is still keeping up
 const C_READY := 4        ## the client has the scheme and can be spawned
+const C_START := 5        ## the host says: begin the round now
 
 # Server -> client
 const S_WELCOME := 64     ## your slot, the round seed, the scheme
@@ -61,6 +68,8 @@ const S_REJECT := 68      ## why you cannot join
 const S_PAUSE := 69       ## everyone waits; a client is behind
 const S_MATCH := 70       ## the score, and the seed of the round now starting
 const S_SLOT_OVERRIDDEN := 71  ## the host converted a slot to/from AI
+const S_LOBBY := 72       ## still waiting: your slot, whether you're the
+                           ## host, and everyone else in the room so far
 
 # Why a join was refused. fpc_atomic's EC_* codes, minus the ones that belong
 # to its menu flow.
@@ -112,6 +121,12 @@ static func heartbeat(tick: int) -> PackedByteArray:
 static func ready() -> PackedByteArray:
 	var b := PackedByteArray()
 	b.append(C_READY)
+	return b
+
+
+static func start() -> PackedByteArray:
+	var b := PackedByteArray()
+	b.append(C_START)
 	return b
 
 
@@ -210,6 +225,24 @@ static func slot_overridden(slot: int, now_ai: bool) -> PackedByteArray:
 	return b
 
 
+## The room as it stands while everyone waits: this peer's own slot, whether
+## THIS peer is the one who can send C_START, and everyone currently in the
+## room (`roster`, an Array of {"slot": int, "name": String}). Sent to a new
+## joiner on arrival and re-broadcast to everyone whenever the roster changes,
+## so a lobby screen can just redraw whatever it was last given.
+static func lobby(your_slot: int, is_host: bool, roster: Array) -> PackedByteArray:
+	var b := PackedByteArray()
+	b.append(S_LOBBY)
+	b.append(your_slot)
+	b.append(int(is_host))
+	b.append(mini(roster.size(), 255))
+	for i in mini(roster.size(), 255):
+		var entry: Dictionary = roster[i]
+		b.append(int(entry["slot"]))
+		_put_string(b, String(entry["name"]))
+	return b
+
+
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
@@ -242,6 +275,8 @@ static func decode(data: PackedByteArray) -> Dictionary:
 				return {}
 			return {"id": id, "tick": _get_u32(data, pos)}
 		C_READY:
+			return {"id": id}
+		C_START:
 			return {"id": id}
 		S_WELCOME:
 			if data.size() < 8:
@@ -304,6 +339,24 @@ static func decode(data: PackedByteArray) -> Dictionary:
 			if data.size() < 3:
 				return {}
 			return {"id": id, "slot": data[1], "now_ai": data[2] != 0}
+		S_LOBBY:
+			if data.size() < 4:
+				return {}
+			var your_slot := data[1]
+			var is_host := data[2] != 0
+			var n := data[3]
+			var at := 4
+			var roster := []
+			for i in n:
+				if at + 1 > data.size():
+					break
+				var slot := data[at]
+				at += 1
+				var name := _get_string(data, at)
+				at += 2 + name.to_utf8_buffer().size()
+				roster.append({"slot": slot, "name": name})
+			return {"id": id, "your_slot": your_slot, "is_host": is_host,
+				"roster": roster}
 		S_SNAPSHOT:
 			# The body is the simulation's own byte layout; snapshot.gd owns it.
 			if data.size() < 5:

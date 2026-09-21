@@ -103,6 +103,23 @@ var listening: bool = false
 var port: int = 0
 var paused: bool = false
 
+## WAITING: a lobby room, nobody seated, `sim` does not exist yet — everything
+## that touches `sim` in `poll()`/`_handle()` is skipped, and a peer joining
+## gets S_LOBBY instead of S_WELCOME. PLAYING: the ordinary, always-been-this-
+## way behaviour — `listen()` defaults to PLAYING outright unless told to open
+## a lobby, so every existing caller (a dedicated server, every current test)
+## is unaffected. `docs/BUGS.md`-worthy: `override_slot()`'s own doc comment
+## used to say plainly "there is no lobby a host and already-connected clients
+## both sit in" — this is that lobby.
+enum State { WAITING, PLAYING }
+var state: int = State.PLAYING
+
+## Which connected peer may send C_START. The first peer to join a WAITING
+## room becomes the host; if they leave before starting, the next remaining
+## peer inherits it. -1 means "no lobby is open" (a State.PLAYING server
+## never sets this) or "a lobby is open but empty."
+var host_peer_id: int = -1
+
 ## peer id -> {slot, name, last_tick, silent_ms, ready}
 var peers: Dictionary = {}
 
@@ -120,8 +137,13 @@ var _intermission: int = -1
 var _bots: Array[int] = []
 
 
+## `lobby`: hold in State.WAITING (a room, roster, no round running) until a
+## host peer sends C_START, instead of starting round 1 immediately. Every
+## existing caller leaves this false and sees no change at all — a dedicated
+## server has no host to press Start, and every current test already assumes
+## the round is running the instant `listen()` returns.
 func listen(on_port: int, scheme_source: String, on_level: int = 0,
-		seed_value: int = 1, teams: bool = false) -> bool:
+		seed_value: int = 1, teams: bool = false, lobby: bool = false) -> bool:
 	scheme_text = scheme_source
 	scheme = Scheme_.new()
 	if not scheme.parse_text(scheme_source, "<server>"):
@@ -147,8 +169,14 @@ func listen(on_port: int, scheme_source: String, on_level: int = 0,
 		return false
 	port = on_port
 	listening = true
-	_start_round()
-	_note("listening on %d, scheme %s" % [on_port, scheme.name])
+	if lobby:
+		state = State.WAITING
+		_note("lobby open on %d, scheme %s — waiting for the host to start"
+			% [on_port, scheme.name])
+	else:
+		state = State.PLAYING
+		_start_round()
+		_note("listening on %d, scheme %s" % [on_port, scheme.name])
 	return true
 
 
@@ -214,6 +242,12 @@ func poll(delta_ms: float) -> int:
 		seat["silent_ms"] = float(seat["silent_ms"]) + delta_ms
 	_accept_and_drop()
 	_receive()
+
+	# A lobby room has no sim to tick and nobody to pause — joins and C_START
+	# are the only things that can happen, and _receive() above already
+	# handled those for this poll.
+	if state == State.WAITING:
+		return 0
 
 	# A client too far behind stops the world for everyone. The alternative is
 	# letting them play a different game from the one everyone else can see.
@@ -311,7 +345,12 @@ func _handle(from: int, msg: Dictionary) -> void:
 	match msg["id"]:
 		Protocol_.C_HELLO:
 			_join(from, msg)
+		Protocol_.C_START:
+			if from == host_peer_id:
+				_begin_from_lobby()
 		Protocol_.C_INPUT:
+			if sim == null:
+				return
 			var seat = peers.get(from, null)
 			if seat == null:
 				return
@@ -351,6 +390,23 @@ func _join(from: int, msg: Dictionary) -> void:
 		if String(peers[id]["name"]) == name:
 			_send(from, Protocol_.reject(Protocol_.REJECT_NAME_TAKEN))
 			return
+
+	# WAITING: seat them in the roster, not in the sim — there is no sim yet.
+	# S_WELCOME (and the round itself) waits for the host's own C_START.
+	if state == State.WAITING:
+		var lobby_slot := _free_lobby_slot()
+		if lobby_slot < 0:
+			_send(from, Protocol_.reject(Protocol_.REJECT_FULL))
+			return
+		peers[from] = {"slot": lobby_slot, "name": name, "last_tick": 0,
+			"silent_ms": 0.0, "ready": false}
+		if host_peer_id < 0:
+			host_peer_id = from
+		_broadcast_lobby()
+		player_joined.emit(lobby_slot, name)
+		_note("%s joined the lobby as slot %d" % [name, lobby_slot])
+		return
+
 	var slot := _free_slot()
 	if slot < 0:
 		_send(from, Protocol_.reject(Protocol_.REJECT_FULL))
@@ -369,8 +425,55 @@ func _join(from: int, msg: Dictionary) -> void:
 	_note("%s joined as slot %d" % [name, slot])
 
 
-## Put a slot into play.
+## A seat for a lobby arrival — no sim exists yet to check `is_bot()` against,
+## unlike `_free_slot()`, because nobody is seated in anything until the round
+## actually starts.
+func _free_lobby_slot() -> int:
+	var taken := {}
+	for id in peers:
+		taken[int(peers[id]["slot"])] = true
+	for i in Const_.PLAYER_COUNT:
+		if not taken.has(i):
+			return i
+	return -1
+
+
+func _roster() -> Array:
+	var out := []
+	for id in peers:
+		var seat: Dictionary = peers[id]
+		out.append({"slot": int(seat["slot"]), "name": String(seat["name"])})
+	return out
+
+
+func _broadcast_lobby() -> void:
+	for id in peers:
+		_send(id, Protocol_.lobby(int(peers[id]["slot"]), id == host_peer_id,
+			_roster()))
+
+
+## Called on C_START from the recognised host, while still WAITING. Every
+## current peer gets its S_WELCOME now — the same message an immediate-start
+## server sends at join time — and then joins the ordinary ready/seat flow via
+## its own C_READY, exactly as it always has.
+func _begin_from_lobby() -> void:
+	if state != State.WAITING:
+		return
+	for id in peers:
+		var seat: Dictionary = peers[id]
+		_send(id, Protocol_.welcome(int(seat["slot"]), round_seed, level,
+			scheme_text, team_play))
+	state = State.PLAYING
+	_start_round()
+	_note("lobby started: %d player(s)" % peers.size())
+
+
+## Put a slot into play. A no-op while a lobby is still WAITING — there is no
+## sim to seat anyone into yet, and nobody should legitimately be sending
+## C_READY before they've been sent S_WELCOME.
 func _seat(slot: int) -> void:
+	if sim == null:
+		return
 	var p := sim.player_by_slot(slot)
 	if p != null:
 		p.in_play = true
@@ -382,7 +485,7 @@ func _release(id: int) -> void:
 		return
 	var seat: Dictionary = peers[id]
 	var slot := int(seat["slot"])
-	var p := sim.player_by_slot(slot)
+	var p := null if sim == null else sim.player_by_slot(slot)
 	if p != null:
 		# A player who disconnects mid-round leaves the field rather than
 		# standing there. Their powerups scatter, as if they had died.
@@ -400,6 +503,14 @@ func _release(id: int) -> void:
 		if not _bots.has(slot):
 			_bots.append(slot)
 		_note("slot %d reverts to an AI" % slot)
+
+	if state == State.WAITING:
+		# The room outlives whoever happened to open it — the next remaining
+		# peer inherits C_START rather than the lobby getting stuck with no
+		# one able to start it.
+		if id == host_peer_id:
+			host_peer_id = peers.keys()[0] if not peers.is_empty() else -1
+		_broadcast_lobby()
 
 
 ## A seat for an arriving player. A bot's seat is fair game — a human turning up

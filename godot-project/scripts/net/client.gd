@@ -31,8 +31,12 @@ signal sound(slot: int, effect: int, arg: int)
 signal round_started(round_index: int, level: int)
 signal match_finished(champion_slot: int, champion_team: int)
 signal slot_overridden(slot: int, now_ai: bool)
+## The lobby roster changed — a peer joined or left, or this client just
+## learned it's the host. Fires on every S_LOBBY, so a screen can just redraw
+## `lobby_roster` each time rather than diffing anything itself.
+signal lobby_updated()
 
-enum State { IDLE, CONNECTING, JOINING, PLAYING, REFUSED, CLOSED }
+enum State { IDLE, CONNECTING, JOINING, WAITING, PLAYING, REFUSED, CLOSED }
 
 var state: int = State.IDLE
 var slot: int = -1
@@ -40,6 +44,15 @@ var level: int = 0
 var team_play: bool = false
 var sim: Sim_ = null
 var paused: bool = false
+
+## Set from S_LOBBY while State.WAITING — see server.gd's own State.WAITING.
+## `lobby_slot` is this client's own slot in the room (not yet a seated
+## player: there is no sim to seat it in). `lobby_roster` is an Array of
+## {"slot": int, "name": String} for everyone currently in the room,
+## including this client itself.
+var lobby_slot: int = -1
+var lobby_is_host: bool = false
+var lobby_roster: Array = []
 
 ## The match, as the server reports it. Never computed here: a client that
 ## counted its own wins could disagree about whether the game is over.
@@ -83,7 +96,8 @@ func poll() -> void:
 	var status := _peer.get_connection_status()
 
 	if status == MultiplayerPeer.CONNECTION_DISCONNECTED:
-		if state == State.PLAYING or state == State.JOINING:
+		if state == State.PLAYING or state == State.JOINING \
+				or state == State.WAITING:
 			state = State.CLOSED
 		return
 
@@ -105,6 +119,19 @@ func poll() -> void:
 
 func _handle(msg: Dictionary) -> void:
 	match msg["id"]:
+		Protocol_.S_LOBBY:
+			# Still waiting: the round has not begun. A stray S_LOBBY arriving
+			# after S_WELCOME (there shouldn't be one — the server stops
+			# sending them once it starts) would otherwise silently knock a
+			# playing client back to WAITING, so this only applies pre-start.
+			if state == State.PLAYING:
+				return
+			state = State.WAITING
+			lobby_slot = int(msg["your_slot"])
+			lobby_is_host = bool(msg["is_host"])
+			lobby_roster = msg["roster"]
+			lobby_updated.emit()
+
 		Protocol_.S_WELCOME:
 			slot = int(msg["slot"])
 			level = int(msg["level"])
@@ -227,6 +254,22 @@ func send_heartbeat() -> void:
 
 func playing() -> bool:
 	return state == State.PLAYING and sim != null
+
+
+## Waiting in a lobby room — connected, seated in the roster, no round
+## running yet. A screen uses this to know whether to draw the lobby (roster,
+## room code, a Start item if `lobby_is_host`) instead of gameplay or a bare
+## "connecting" spinner.
+func in_lobby() -> bool:
+	return state == State.WAITING
+
+
+## Ask the server to begin the round. Only the host's C_START is honoured —
+## server.gd silently ignores it from anyone else — so this is safe to expose
+## unconditionally rather than gating it on `lobby_is_host` here too.
+func request_start() -> void:
+	if state == State.WAITING:
+		_send(Protocol_.start())
 
 
 func snapshots_applied() -> int:

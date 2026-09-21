@@ -29,6 +29,8 @@ func _init() -> void:
 	await _test_bots_survive_a_round(t)
 	await _test_a_silent_client_is_reaped(t)
 	await _test_slot_override(t)
+	await _test_lobby_waits_for_the_host(t)
+	await _test_lobby_host_reassigned_on_departure(t)
 	quit(t.finish())
 
 
@@ -533,6 +535,98 @@ func _test_slot_override(t: T_) -> void:
 	t.ok(not server.sim.is_bot(slot), "and it is no longer a bot")
 
 	a.close()
+	b.close()
+	server.close()
+
+
+## A room opened with `lobby: true` holds everyone in State.WAITING — no round
+## running, no sim, just a roster — until the first-joined peer sends
+## C_START. This is the behaviour change docs/BUGS.md's `override_slot()`
+## comment flagged as missing: "there is no lobby a host and already-
+## connected clients both sit in."
+func _test_lobby_waits_for_the_host(t: T_) -> void:
+	var server: Server_ = Server_.new()
+	if not t.ok(server.listen(PORT + 7, _scheme_text(), 0, 99, false, true),
+			"the server opens a lobby on %d" % (PORT + 7)):
+		return
+	t.eq(server.state, Server_.State.WAITING, "and starts in State.WAITING")
+
+	var a: Client_ = Client_.new()
+	var b: Client_ = Client_.new()
+	a.connect_to("ws://127.0.0.1:%d" % (PORT + 7), "alice")
+	b.connect_to("ws://127.0.0.1:%d" % (PORT + 7), "bob")
+	for _i in 200:
+		await _pump(server, [a, b])
+		if a.in_lobby() and b.in_lobby():
+			break
+	if not t.ok(a.in_lobby() and b.in_lobby(), "both clients reach the lobby"):
+		server.close()
+		return
+	t.ok(not a.playing() and not b.playing(),
+		"[invariant] neither is playing yet — no sim exists")
+	t.eq(server.sim, null, "[invariant] the server has not built a sim either")
+
+	t.ok(a.lobby_is_host, "the first to join (alice) is the host")
+	t.ok(not b.lobby_is_host, "the second (bob) is not")
+	t.eq(a.lobby_roster.size(), 2, "alice's roster has both of them")
+	t.eq(b.lobby_roster.size(), 2, "and so does bob's — it's broadcast, not personal")
+
+	# Bob cannot start it — the server just ignores a C_START from a non-host.
+	b.request_start()
+	for _i in 10:
+		await _pump(server, [a, b])
+	t.eq(server.state, Server_.State.WAITING,
+		"a non-host's C_START does nothing")
+
+	# Alice, the host, can.
+	a.request_start()
+	for _i in 200:
+		await _pump(server, [a, b])
+		if a.playing() and b.playing():
+			break
+	t.ok(a.playing() and b.playing(), "the host's C_START begins the round")
+	t.ok(not a.in_lobby() and not b.in_lobby(),
+		"and neither client is 'in lobby' any more")
+
+	a.close()
+	b.close()
+	server.close()
+
+
+## If the host leaves before starting, the room does not get stuck — the next
+## remaining peer inherits C_START.
+func _test_lobby_host_reassigned_on_departure(t: T_) -> void:
+	var server: Server_ = Server_.new()
+	if not t.ok(server.listen(PORT + 8, _scheme_text(), 0, 1, false, true),
+			"the server opens a lobby on %d" % (PORT + 8)):
+		return
+
+	var a: Client_ = Client_.new()
+	var b: Client_ = Client_.new()
+	a.connect_to("ws://127.0.0.1:%d" % (PORT + 8), "alice")
+	b.connect_to("ws://127.0.0.1:%d" % (PORT + 8), "bob")
+	for _i in 200:
+		await _pump(server, [a, b])
+		if a.in_lobby() and b.in_lobby():
+			break
+	if not t.ok(a.in_lobby() and b.in_lobby(), "both reach the lobby"):
+		server.close()
+		return
+	t.ok(a.lobby_is_host, "alice hosts to start with")
+
+	a.close()
+	for _i in 20:
+		await _pump(server, [b])
+	t.ok(server.host_peer_id >= 0,
+		"the room still has a host once alice is gone")
+
+	b.request_start()
+	for _i in 200:
+		await _pump(server, [b])
+		if b.playing():
+			break
+	t.ok(b.playing(), "bob inherited C_START and could start the round himself")
+
 	b.close()
 	server.close()
 

@@ -116,6 +116,23 @@ func _test_protocol_round_trip(t: T_) -> void:
 	var pz := Protocol_.decode(Protocol_.pause(true))
 	t.ok(pz.get("paused"), "pause decodes")
 
+	var st := Protocol_.decode(Protocol_.start())
+	t.eq(st.get("id"), Protocol_.C_START, "start decodes")
+
+	var lob := Protocol_.decode(Protocol_.lobby(2, true, [
+		{"slot": 0, "name": "alice"}, {"slot": 2, "name": "Ñandú 💣"}]))
+	t.eq(lob.get("your_slot"), 2, "lobby carries your own slot")
+	t.ok(lob.get("is_host"), "and whether you're the host")
+	var roster: Array = lob.get("roster", [])
+	t.eq(roster.size(), 2, "the whole roster decodes")
+	t.eq(roster[0]["slot"], 0, "each entry's slot")
+	t.eq(roster[0]["name"], "alice", "and name")
+	t.eq(roster[1]["name"], "Ñandú 💣", "a UTF-8 name in the roster survives")
+
+	var empty_lobby := Protocol_.decode(Protocol_.lobby(0, false, []))
+	t.eq((empty_lobby.get("roster", []) as Array).size(), 0,
+		"an empty roster (a room of one) decodes cleanly")
+
 
 # A truncated or hostile packet must decode to nothing, never crash. A server
 # that can be killed by a malformed message is a server nobody can host.
@@ -365,10 +382,11 @@ func _test_match_message(t: T_) -> void:
 	# S_SOUNDS would misread every event after the first. It moved again for
 	# C_INPUT's fourth byte (hold-to-carry) — a version-2 client's 3-byte
 	# input would leave the server reading one byte short of the next message.
-	# And again for S_SLOT_OVERRIDDEN (the host-override key) — a new message
-	# type, not a layout change to an existing one, but tracked here anyway
-	# so this assertion stays the one place that has to move when it does.
-	t.eq(Protocol_.VERSION, 4, "the protocol version moved with each layout")
+	# And again for S_SLOT_OVERRIDDEN (the host-override key), and again for
+	# C_START/S_LOBBY (the pre-game lobby) — two more new message types, not
+	# layout changes to an existing one, but tracked here anyway so this
+	# assertion stays the one place that has to move when it does.
+	t.eq(Protocol_.VERSION, 5, "the protocol version moved with each layout")
 
 
 # The client rebuilds its field when a match message names a different LEVEL.
