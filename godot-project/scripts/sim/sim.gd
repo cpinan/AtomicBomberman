@@ -1827,17 +1827,11 @@ func grab_bomb(p: Player_) -> bool:
 			continue
 		b.carried_by = p.slot
 		b.move_dir = Types_.Dir.NONE
-		# A tap grabs and keeps carrying until thrown — the same one-press
-		# feel as every other action in the game (drop, kick, punch). This
-		# used to require the button held down continuously, per MANUAL.BM's
-		# literal wording ("holding down the Drop Bomb button"); a real
-		# player's tap always has the key down at the instant the edge fires,
-		# so every grab through actual input became hold-required and dropped
-		# itself again within one tick of a normal release — read live as
-		# "the gauntlet does nothing." Deviating from the manual here on
-		# purpose: docs/BUGS.md-worthy, the manual's own release behavior was
-		# never disassembly-verified to begin with (see throw_bomb()'s doc).
-		b.hold_required_to_carry = false
+		# A tap grabs it; holding the same button keeps it carried, and
+		# LETTING GO THROWS IT — MANUAL.BM: "you may carry a bomb by grabbing
+		# and holding down the Drop Bomb button." _check_hold_to_carry() is
+		# the other half, called every tick right after this one runs.
+		b.hold_required_to_carry = true
 		p.pickup_pause = Values_.V[Const_.Res.PICKUP_PAUSE_FRAMES]
 		_play(p.slot, Types_.SoundEffect.BOMB_GRAB)
 		return true
@@ -1849,16 +1843,12 @@ func grab_bomb(p: Player_) -> bool:
 ## an edge like any other; this is what "holding down" means for a
 ## simulation that only sees one tick at a time. Called once per player every
 ## tick, right after `_player_action()`: if this player is carrying a bomb
-## and the button is NOT down this tick, the carry ends and the bomb is set
-## down where they are standing.
-##
-## Deliberately a DROP, not a throw. MANUAL.BM never says releasing throws
-## it — throwing stays the explicit second press `_player_action()` already
-## routes to `throw_bomb()` (0x423xxx is not disassembled for this; nothing
-## on the disc pins down what release does, so this is the port's own
-## reading, flagged as one). A player who wants to throw still presses the
-## button again before letting go; a player who just stops holding gets the
-## bomb back on the ground, not launched three cells by accident.
+## and the button is NOT down this tick, letting go THROWS it — the manual's
+## own words, "holding down" implies letting go is the release action, and a
+## live playtest confirmed that is the mechanic wanted here. A player can
+## still throw with an explicit second press without ever releasing first
+## (`throw_bomb()` below, `_player_action()`'s own FIRST-while-carrying case);
+## either path reaches the same `_throw_carried()`.
 func _check_hold_to_carry(p: Player_) -> void:
 	if p.action_first_held:
 		return
@@ -1867,11 +1857,7 @@ func _check_hold_to_carry(p: Player_) -> void:
 			continue
 		if not b.hold_required_to_carry:
 			return    # this carry was never a hold — nothing to release
-		b.carried_by = -1
-		b.hold_required_to_carry = false
-		b.move_dir = Types_.Dir.NONE
-		b.place_at_tile_centre(p.tile_x(), p.tile_y())
-		p.pickup_pause = 0
+		_throw_carried(p, b)
 		return
 
 
@@ -1882,29 +1868,36 @@ func throw_bomb(p: Player_) -> bool:
 	for b in bombs:
 		if b.carried_by != p.slot:
 			continue
-		# Three cells ahead, but no further than the nearest open one — a
-		# thrown bomb landing where another bomb already sits was the port's
-		# own gap (docs/BUGS.md), not a case _bomb_blocked() left uncovered.
-		var landing := _landing_cell(b, p.tile_x(), p.tile_y(), p.facing, 3)
-		var tx := landing.x
-		var ty := landing.y
-		b.carried_by = -1
-		b.hold_required_to_carry = false
-		b.move_dir = p.facing
-		b.jelly_bounce = p.jelly_bombs
-		b.bounces_left = 0
-		# The GRAB left p.pickup_pause counting down so BPICKUP.ANI could play
-		# out. A throw ends that pose — it is the deliberate next action, not
-		# an interruption of the pickup — and without this the view's own
-		# check for pickup_pause (game_view.gd) outranks the "carrying" check,
-		# so a fast grab-then-throw kept drawing the player picking up a bomb
-		# that had already left their hands.
-		p.pickup_pause = 0
-		_launch(b, tx, ty, Values_.V[Const_.Res.PUNCH_ARC_BIG],
-			Values_.V[Const_.Res.PUNCHED_BOMB_SPEED])
-		_play(p.slot, Types_.SoundEffect.BOMB_THROWN)
+		_throw_carried(p, b)
 		return true
 	return false
+
+
+## The actual launch, shared by throw_bomb() (an explicit second press) and
+## _check_hold_to_carry() (letting go of the grab button) — same result
+## either way, just a different trigger.
+func _throw_carried(p: Player_, b: Bomb_) -> void:
+	# Three cells ahead, but no further than the nearest open one — a
+	# thrown bomb landing where another bomb already sits was the port's
+	# own gap (docs/BUGS.md), not a case _bomb_blocked() left uncovered.
+	var landing := _landing_cell(b, p.tile_x(), p.tile_y(), p.facing, 3)
+	var tx := landing.x
+	var ty := landing.y
+	b.carried_by = -1
+	b.hold_required_to_carry = false
+	b.move_dir = p.facing
+	b.jelly_bounce = p.jelly_bombs
+	b.bounces_left = 0
+	# The GRAB left p.pickup_pause counting down so BPICKUP.ANI could play
+	# out. A throw ends that pose — it is the deliberate next action, not
+	# an interruption of the pickup — and without this the view's own
+	# check for pickup_pause (game_view.gd) outranks the "carrying" check,
+	# so a fast grab-then-throw kept drawing the player picking up a bomb
+	# that had already left their hands.
+	p.pickup_pause = 0
+	_launch(b, tx, ty, Values_.V[Const_.Res.PUNCH_ARC_BIG],
+		Values_.V[Const_.Res.PUNCHED_BOMB_SPEED])
+	_play(p.slot, Types_.SoundEffect.BOMB_THROWN)
 
 
 ## Spooge: place every available bomb in a line ahead of the player, until
