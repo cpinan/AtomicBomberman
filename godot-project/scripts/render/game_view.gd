@@ -976,8 +976,33 @@ func draw_player_of(on: CanvasItem, slot: int) -> void:
 ## use of this; there is no original art to restore for a disease state.
 ## Ten ticks (half a second at 20 Hz) each way, so it reads as a pulse, not a
 ## flicker fast enough to be mistaken for a rendering glitch.
-const DISEASE_TINT := Color(0.55, 1.0, 0.45)
-const DISEASE_PULSE_TICKS := 10
+## EVERY channel is below 1.0, green by the least. That matters more than the
+## hue does: a tint that only pulled red and blue down left the GREEN player
+## almost unchanged, because green is the one channel it did not touch — the
+## sickly colour was there and simply could not be seen on the player most
+## likely to be carrying it. Dimming all three makes it read as a pulse on
+## every player colour, and dimming green least keeps it reading as sickly
+## rather than merely dark.
+const DISEASE_TINT := Color(0.45, 0.85, 0.35)
+## Six ticks each way at 20 Hz — a 0.6 s cycle, which reads as a blink. Ten
+## each way was a full second and looked more like slow breathing than a
+## warning.
+const DISEASE_PULSE_TICKS := 6
+
+## The pulse as the shader wants it — a plain RGB multiply for one slot, white
+## when that slot is healthy, absent or dying. TintNode calls this once per
+## frame; _disease_tint() below is the same curve as a Color, still used for
+## the frames drawn through the non-shader fallback path.
+func disease_tint_rgb(slot: int) -> Vector3:
+	for p in sim.players:
+		if p.slot != slot:
+			continue
+		if not p.alive or p.dying:
+			break
+		var c := _disease_tint(p)
+		return Vector3(c.r, c.g, c.b)
+	return Vector3(1.0, 1.0, 1.0)
+
 
 func _disease_tint(p: Player_) -> Color:
 	if not p.any_disease():
@@ -1188,13 +1213,63 @@ func _draw_test_editor() -> void:
 	var lines := [
 		"TEST EDITOR — T to leave",
 		"LMB cycle brick   RMB place powerup   [ ] choose: %s" % name,
-		"B bomb   K kill   D disease   C cure   R clear field",
+		"G give it   X strip player   B bomb   K kill   D disease   C cure",
+		"R clear field   P pause   . step one tick",
+		_editor_player_state(),
 	]
 	draw_rect(Rect2(0, 0, Const_.SCREEN_W, 11 * lines.size() + 6),
 		Color(0, 0, 0, 0.6))
 	for i in lines.size():
 		draw_string(font, Vector2(4, 10 + i * 11), lines[i],
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(1, 1, 0.6))
+
+
+## WHAT THE SIM THINKS THE TARGET PLAYER IS HOLDING, in one line.
+##
+## The point of the whole editor: "the glove does nothing" and "the glove is
+## not switched on" look identical on screen, and every round of live reports
+## so far has had to guess between them. This prints the derived flags the
+## ability functions actually branch on, the facing they use to pick a cell,
+## and whether a bomb is where that cell says — so a failing press can be read
+## off the screen instead of inferred.
+func _editor_player_state() -> String:
+	var p: Player_ = null
+	for other in sim.players:
+		if other.in_play and other.tile_x() == editor_cursor.x \
+				and other.tile_y() == editor_cursor.y:
+			p = other
+			break
+	if p == null:
+		p = sim.player_by_slot(0)
+	if p == null:
+		return "no player"
+	var have := PackedStringArray()
+	if p.can_kick:
+		have.append("KICK")
+	if p.can_punch:
+		have.append("PUNCH")
+	if p.can_grab:
+		have.append("GRAB")
+	if p.can_spooge:
+		have.append("SPOOGE")
+	if p.jelly_bombs:
+		have.append("JELLY")
+	if p.trigger_bombs > 0:
+		have.append("TRIGGER(%d)" % p.trigger_bombs)
+	var sick := PackedStringArray()
+	for d in p.active_diseases():
+		sick.append(str(d))
+	var step: Vector2i = Types_.DIR_VEC[p.facing]
+	var ahead := sim.bomb_at(p.tile_x() + step.x, p.tile_y() + step.y)
+	var under := sim.bomb_at(p.tile_x(), p.tile_y())
+	return "slot %d  %s  bombs %d/%d  flame %d  facing %s  under:%s ahead:%s%s  sick[%s]" % [
+		p.slot,
+		"none" if have.is_empty() else " ".join(have),
+		p.bombs_available, p.bombs_total, p.flame_len, _compass(p.facing),
+		"yes" if under != null else "no",
+		"yes" if ahead != null else "no",
+		"" if ahead == null else ("(mine)" if ahead.owner == p.slot else "(not mine)"),
+		",".join(sick)]
 
 
 ## One node per player colour per layer group. Each carries its own material
@@ -1229,4 +1304,18 @@ class TintNode extends Node2D:
 			if slot < 0:
 				view.draw_shadows_on(self)
 			else:
+				# THE DISEASE PULSE, as a shader uniform on this node.
+				#
+				# It cannot be a per-draw modulate: recolour.gdshader writes
+				# COLOR outright from the remap tables, so a colour passed to
+				# draw_texture_rect_region() is discarded. A uniform is read
+				# when this node's material is used, which is once per node
+				# per frame — and since a player's sprites live on the "over"
+				# node for their own slot while their bombs and flames live on
+				# the "under" one, tinting here reaches the bomberman and
+				# nothing else.
+				var mat := material as ShaderMaterial
+				if mat != null:
+					mat.set_shader_parameter("actor_tint",
+						view.disease_tint_rgb(slot))
 				view.draw_player_of(self, slot)

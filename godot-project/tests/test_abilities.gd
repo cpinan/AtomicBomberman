@@ -38,6 +38,12 @@ func _init() -> void:
 	_test_the_button_does_the_other_thing(t)
 	_test_action_two_stops_a_kicked_bomb(t)
 	_test_a_bomb_on_the_head(t)
+	_test_kick_needs_contact(t)
+	_test_a_blocked_step_never_moves_you_backwards(t)
+	_test_pickup_pause_ages_while_standing_still(t)
+	_test_a_rolling_bomb_stays_grid_aligned(t)
+	_test_disease_passes_by_contact(t)
+	_test_a_thrown_bomb_clears_a_wall(t)
 	quit(t.finish())
 
 
@@ -261,10 +267,16 @@ func _test_punch(t: T_) -> void:
 	t.ok(b5.tile_x() != blocker.tile_x() or b5.tile_y() != blocker.tile_y(),
 		"[invariant] two bombs never end up on the same cell")
 
-	# A punch with NOWHERE to go at all — the very next cell is already
-	# blocked — must fail outright rather than play the animation and sound
-	# over a zero-distance flight. A live playtest read this as "the glove
-	# doesn't work": the punch anim fired but the bomb never visibly moved.
+	# A PUNCHED BOMB FLIES OVER A WALL. MANUAL.BM, on the Wallybomb scheme:
+	# "Throw and punch your bombs over the wall to destroy your opponents."
+	#
+	# This used to assert the opposite — that a punch with the very next cell
+	# blocked failed outright — because _landing_cell() walked out one cell at
+	# a time and stopped at the first obstacle, so a wall anywhere in the first
+	# three cells collapsed the throw to zero distance. That made the bomb drop
+	# at the thrower's feet, which an earlier session papered over by refusing
+	# the punch entirely. Both the refusal and the assertion were wrong: the
+	# arc is supposed to clear the wall.
 	var s6 := _sim(1)
 	var p6: Player_ = s6.players[0]
 	p6.place_at_tile_centre(2, 5)
@@ -273,10 +285,33 @@ func _test_punch(t: T_) -> void:
 	var b6 := s6.place_bomb(p6)
 	b6.place_at_tile_centre(3, 5)
 	s6.field.brick[Field_.idx(4, 5)] = Types_.Brick.SOLID
-	t.ok(not s6.punch_bomb(p6),
-		"a punch with the very next cell blocked fails outright")
-	t.ok(not b6.flying, "and never takes off")
-	t.eq(b6.tile_x(), 3, "staying exactly where it was")
+	t.ok(s6.punch_bomb(p6), "a punch over a wall is allowed")
+	t.ok(b6.flying, "and the bomb takes off")
+	for _i in 60:
+		s6.tick()
+		if not b6.flying:
+			break
+	t.ok(b6.tile_x() > 4, "it lands PAST the wall, not against it")
+	t.eq(s6.field.brick[Field_.idx(4, 5)], Types_.Brick.SOLID,
+		"and the wall it flew over is untouched")
+
+	# A punch with genuinely nowhere to go — solid all the way to the arena
+	# edge — must still fail outright rather than play the animation and the
+	# sound over a zero-distance flight. That was a real live report ("the
+	# glove doesn't work"), and it stays fixed.
+	var s7 := _sim(1)
+	var p7: Player_ = s7.players[0]
+	p7.place_at_tile_centre(2, 5)
+	p7.facing = Types_.Dir.RIGHT
+	s7.give_powerup(p7, Types_.PowerUp.PUNCH)
+	var b7 := s7.place_bomb(p7)
+	b7.place_at_tile_centre(3, 5)
+	for x in range(4, Const_.FIELD_W):
+		s7.field.brick[Field_.idx(x, 5)] = Types_.Brick.SOLID
+	t.ok(not s7.punch_bomb(p7),
+		"a punch with nowhere to land at all fails outright")
+	t.ok(not b7.flying, "and never takes off")
+	t.eq(b7.tile_x(), 3, "staying exactly where it was")
 
 
 func _test_grab_and_throw(t: T_) -> void:
@@ -909,3 +944,202 @@ func _sounds_of(sim) -> Array:
 	for ev in sim.sounds:
 		out.append(names.get(int(ev["effect"]), "?"))
 	return out
+
+
+## KICK ON CONTACT, NOT ON FACING. MANUAL.BM: "Allows you to kick any bomb
+## down a hallway."
+##
+## The kick test used to run BEFORE the move and ask only "is there a bomb in
+## the cell I face" — so it fired on the first tick of the direction key with
+## the player still anywhere in their own cell, a full cell of travel short of
+## touching the bomb. Live that read as the bomb fleeing before it could be
+## reached, and it made the Boxing Glove and the Blue Hand unreachable for a
+## player who also held the kicker: turning to face a bomb is the only way to
+## aim a punch or a grab, and facing it was enough to kick it away.
+func _test_kick_needs_contact(t: T_) -> void:
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	sim.give_powerup(p, Types_.PowerUp.KICK)
+	var b := sim.place_bomb(p)
+	b.place_at_tile_centre(5, 5)
+	# Standing in the cell next door, on its FAR side. The collision box is a
+	# whole cell wide, so the flush line against the bomb's cell IS the centre
+	# of this one — anywhere to the right of that centre is clear floor the
+	# player still has to cross before touching anything.
+	p.place_at_tile_centre(6, 5)
+	p.x += 1500
+	var start_x := p.x
+	t.eq(p.tile_x(), 6, "the player starts in the cell next to the bomb")
+	t.ok(p.speed < 1500, "and more than one step short of the bomb")
+	p.move = Types_.MoveState.LEFT
+	sim.tick()
+	t.eq(b.move_dir, Types_.Dir.NONE,
+		"merely facing the bomb from a cell away does not kick it")
+	t.ok(p.x < start_x, "the player walks toward it instead")
+	# Keep walking: the moment the step is capped by the bomb, it goes.
+	for _i in 10:
+		sim.tick()
+		if b.move_dir != Types_.Dir.NONE:
+			break
+	t.eq(b.move_dir, Types_.Dir.LEFT, "walking INTO it kicks it")
+	t.eq(b.speed, int(Values_.V[Const_.Res.KICKED_BOMB_SPEED]),
+		"at the tabulated speed")
+
+
+## A blocked step must never move the player the way they are NOT pressing.
+##
+## _slide_x()/_slide_y() return the position flush against the blocked cell,
+## which is BEHIND a player who is already standing past that line — walk off
+## the cell you just bombed, turn back, and the flush position is a step in
+## the direction you let go of. Holding left slid you right.
+func _test_a_blocked_step_never_moves_you_backwards(t: T_) -> void:
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	var b := sim.place_bomb(p)
+	b.place_at_tile_centre(5, 5)
+	# Part-way into the cell to the right of the bomb, past the flush line.
+	p.place_at_tile_centre(6, 5)
+	p.x += 1000
+	var start_x := p.x
+	p.move = Types_.MoveState.LEFT
+	sim.tick()
+	t.ok(p.x <= start_x, "pressing left never moves the player right")
+	for _i in 20:
+		sim.tick()
+	t.ok(p.x <= start_x, "and it still does not, tick after tick")
+	# Same on the vertical axis, where the flush line is the other sign.
+	var s2 := _sim(1)
+	var p2: Player_ = s2.players[0]
+	var b2 := s2.place_bomb(p2)
+	b2.place_at_tile_centre(5, 5)
+	p2.place_at_tile_centre(5, 6)
+	p2.y += 900
+	var start_y := p2.y
+	p2.move = Types_.MoveState.UP
+	for _i in 20:
+		s2.tick()
+	t.ok(p2.y <= start_y, "pressing up never moves the player down")
+
+
+## Resource 665's pickup freeze has to age out for a player who is standing
+## still, not only for one who walks.
+##
+## The countdown used to live inside _move_player(), which returns early for
+## a STILL player — so a grab made standing still left pickup_pause stuck at
+## its starting value forever. game_view.gd draws BPICKUP.ANI's pickup pose
+## while it is above zero, AHEAD of the carrying pose, and draw_bombs_of()
+## skips a carried bomb entirely: the bomb vanished and the player froze
+## mid-pickup. That is what "the blue glove does nothing" looked like.
+func _test_pickup_pause_ages_while_standing_still(t: T_) -> void:
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	p.place_at_tile_centre(5, 5)
+	p.facing = Types_.Dir.RIGHT
+	sim.give_powerup(p, Types_.PowerUp.GRAB)
+	var b := sim.place_bomb(p)
+	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.FIRST, true)
+	sim.tick()
+	t.eq(b.carried_by, p.slot, "the grab picks it up")
+	t.ok(p.pickup_pause > 0, "and starts the pickup freeze")
+	var pause: int = int(Values_.V[Const_.Res.PICKUP_PAUSE_FRAMES])
+	for _i in pause + 4:
+		sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.NONE, true)
+		sim.tick()
+	t.eq(p.pickup_pause, 0,
+		"the freeze ends even though the player never moved")
+	t.eq(b.carried_by, p.slot, "and the bomb is still being carried")
+
+
+## A rolling bomb that turns must snap to the intersection it turns at.
+##
+## _at_cell_centre() is a tolerance — "within half a step" — so a bomb that
+## turned kept up to half a step of error on the axis it was now crossing, and
+## every later turn added its own. A jelly bomb doing its 1-in-3 crazy turns
+## drifted off the grid within a few bounces and its tile_x()/tile_y() flipped
+## a tick out of step with what the player could see, which is what made its
+## bounces look random.
+func _test_a_rolling_bomb_stays_grid_aligned(t: T_) -> void:
+	var worst := 0
+	for round_seed in [1, 2, 3, 4, 5, 6]:
+		var sim := _sim(1, round_seed)
+		var p: Player_ = sim.players[0]
+		p.place_at_tile_centre(5, 5)
+		sim.give_powerup(p, Types_.PowerUp.KICK)
+		sim.give_powerup(p, Types_.PowerUp.JELLY)
+		var b := sim.place_bomb(p)
+		b.place_at_tile_centre(6, 5)
+		b.fuze = 100000        # outlive the roll: this is about position only
+		p.move = Types_.MoveState.RIGHT
+		for _i in 80:
+			sim.tick()
+			if b.detonated:
+				break
+			# While rolling along one axis the bomb must sit exactly on the
+			# centre line of the other.
+			if b.move_dir == Types_.Dir.LEFT or b.move_dir == Types_.Dir.RIGHT:
+				worst = maxi(worst, absi(b.y % Bomb_.TILE_H_CP
+					- Bomb_.TILE_H_CP / 2))
+			elif b.move_dir == Types_.Dir.UP or b.move_dir == Types_.Dir.DOWN:
+				worst = maxi(worst, absi(b.x % Bomb_.TILE_W_CP
+					- Bomb_.TILE_W_CP / 2))
+	t.eq(worst, 0, "a jelly bomb never drifts off the grid as it turns")
+
+
+## A DISEASE PASSES BY CONTACT, from a real tick().
+##
+## MANUAL.BM says it from the player's side — "Good disease strategies often
+## involve passing the disease to as many opponents as possible" — and
+## VALUELST backs it with two resources that exist for nothing else:
+## DISEASE_FRESHNESS, "frames before it can pass again", and
+## DISEASE_MULTIPLIES. spread_disease() was written for this and then called
+## from nowhere but its own unit test, so in a real match a disease could only
+## ever be caught off a skull on the field, never off another player.
+func _test_disease_passes_by_contact(t: T_) -> void:
+	var sim := _sim(2)
+	var a: Player_ = sim.players[0]
+	var b: Player_ = sim.players[1]
+	a.place_at_tile_centre(5, 5)
+	b.place_at_tile_centre(9, 5)
+	t.ok(sim.catch_disease(a, Types_.Disease.POOPS), "one player is diseased")
+	t.ok(not b.has_disease(Types_.Disease.POOPS), "the other is not, yet")
+
+	# Apart: nothing crosses, however long they stand there.
+	for _i in int(Values_.V[Const_.Res.DISEASE_FRESHNESS]) + 5:
+		sim.tick()
+	t.ok(not b.has_disease(Types_.Disease.POOPS),
+		"standing apart passes nothing")
+
+	# Same tile: it crosses.
+	b.place_at_tile_centre(a.tile_x(), a.tile_y())
+	sim.tick()
+	t.ok(b.has_disease(Types_.Disease.POOPS),
+		"touching a diseased player catches it")
+
+
+## A THROWN bomb clears a wall too — the blue glove's half of MANUAL.BM's
+## "Throw and punch your bombs over the wall to destroy your opponents."
+## Throw and punch share _landing_cell(), so this and the punch case above
+## stand or fall together; both are here because both were reported live.
+func _test_a_thrown_bomb_clears_a_wall(t: T_) -> void:
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	p.place_at_tile_centre(2, 5)
+	p.facing = Types_.Dir.RIGHT
+	sim.give_powerup(p, Types_.PowerUp.GRAB)
+	var b := sim.place_bomb(p)
+	sim.field.brick[Field_.idx(3, 5)] = Types_.Brick.SOLID
+	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.FIRST, true)
+	sim.tick()
+	t.eq(b.carried_by, p.slot, "the bomb is picked up")
+	# Let go: it is thrown, and the wall in the very next cell must not
+	# collapse the throw to zero distance the way it used to.
+	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.NONE, false)
+	sim.tick()
+	t.ok(b.flying, "releasing throws it")
+	for _i in 60:
+		sim.tick()
+		if not b.flying:
+			break
+	t.ok(b.tile_x() > 3, "and it lands PAST the wall, not at the thrower's feet")
+	t.eq(sim.field.brick[Field_.idx(3, 5)], Types_.Brick.SOLID,
+		"the wall it flew over is untouched")

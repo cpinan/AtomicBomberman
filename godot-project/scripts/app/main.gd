@@ -246,6 +246,12 @@ var _shot_tick: int = 1
 var _shot_taken: bool = false
 var _auto_bomb_tick: int = -1
 
+## Test-editor clock control (T, then P and `.`). Dev-only: nothing outside
+## the editor's own keys ever sets these, and a paused sim still redraws so
+## the frozen frame — and the editor's own readout — stay live.
+var _editor_paused: bool = false
+var _editor_step_once: bool = false
+
 ## Quit at this tick, drawing nothing. See --quit-tick.
 var _quit_tick: int = -1
 
@@ -1095,6 +1101,12 @@ func _process(delta: float) -> void:
 
 	while _accum_ms >= float(Const_.TICK_MS):
 		_accum_ms -= float(Const_.TICK_MS)
+		# PAUSED (editor P): the clock stops but the frame keeps drawing, so a
+		# bomb's fuze can be read at leisure instead of going off while the
+		# repro is being set up. `.` lets exactly one tick through.
+		if _editor_paused and not _editor_step_once:
+			continue
+		_editor_step_once = false
 		_step()
 
 	# A tick can end the game under us: a campaign that is lost or finished
@@ -1690,6 +1702,35 @@ func _editor_key(keycode: int) -> void:
 		KEY_R:
 			sim.field.brick.fill(Types_.Brick.BLANK)
 			sim.field.powerup.fill(Field_.NO_POWERUP)
+		KEY_G:
+			# GIVE the selected powerup straight to the player, with no pickup
+			# to walk over. Walking over one runs give_powerup()'s exclusivity
+			# rules against whatever is already held, which is the interaction
+			# that has hidden several live bugs — so testing ONE powerup needs
+			# a way to get it that is not "collect it on a field full of
+			# others". Pair with X below.
+			var give_to := _editor_target(view.editor_cursor)
+			if give_to != null:
+				sim.give_powerup(give_to, view.editor_powerup)
+		KEY_X:
+			# STRIP the player back to newborn: no powerups, no diseases.
+			# recompute_powers() owns the derivation of can_kick/can_punch/
+			# can_grab/... from `collected`, so clearing the array and calling
+			# it is the whole job — hand-clearing the flags here would be a
+			# second copy of that rule, free to drift from the real one.
+			var strip := _editor_target(view.editor_cursor)
+			if strip != null:
+				for which in Const_.POWERUP_COUNT:
+					strip.collected[which] = 0
+				sim.cure_all(strip)
+				sim.recompute_powers(strip)
+		KEY_P:
+			_editor_paused = not _editor_paused
+		KEY_PERIOD:
+			# One tick while paused. Answers "on exactly which tick did that
+			# fire", which a 20 Hz clock otherwise makes unaskable.
+			if _editor_paused:
+				_editor_step_once = true
 
 
 func _input(event: InputEvent) -> void:

@@ -410,6 +410,11 @@ func tick() -> void:
 				p.kick_ticks -= 1
 			if p.punch_ticks > 0:
 				p.punch_ticks -= 1
+			# Resource 665's pickup freeze ages here rather than inside
+			# _move_player(), which never sees a player who is standing
+			# still — see the comment on its own pickup_pause check.
+			if p.pickup_pause > 0:
+				p.pickup_pause -= 1
 			_move_player(p)
 
 	# The field acting on the players, after they have moved: a conveyor
@@ -441,6 +446,35 @@ func tick() -> void:
 
 	_move_bombs()
 	_tick_bombs()
+
+	# CONTAGION: a disease passes from body to body on contact. MANUAL.BM only
+	# spells this out from the player's side — "Good disease strategies often
+	# involve passing the disease to as many opponents as possible. Good
+	# diseases to do this with are: Short Fuze, Reverse Controls, Poops, and
+	# Short Flame" — but that is enough, and VALUELST backs it with two
+	# resources that exist for nothing else: DISEASE_FRESHNESS, "frames before
+	# it can pass again", and DISEASE_MULTIPLIES, whether the giver keeps it.
+	#
+	# spread_disease() below was written for this and then never called from
+	# anywhere but its own test, so in a real match a disease could only ever
+	# be caught off a skull on the field and never off another player. Both
+	# halves of the mechanic — the strategy the manual names and the reason a
+	# skull is worth running away from — were missing.
+	#
+	# After movement, so it reads the tile each player actually ended the tick
+	# on. Both directions are tried on a meeting: two diseased players trade
+	# whatever the other does not already have. catch_disease() zeroes the
+	# receiver's freshness, so nothing bounces straight back in the same tick.
+	for giver in players:
+		if not giver.alive or giver.dying or not giver.any_disease():
+			continue
+		for taker in players:
+			if taker == giver or not taker.alive or taker.dying:
+				continue
+			if giver.tile_x() != taker.tile_x() \
+					or giver.tile_y() != taker.tile_y():
+				continue
+			spread_disease(giver, taker)
 
 	# After movement and after this tick's flames exist, so a player who walks
 	# into a standing flame and a player this tick's blast reaches both die on
@@ -507,24 +541,52 @@ func _move_player(p: Player_) -> void:
 	var step: Vector2i = Types_.DIR_VEC[dir]
 
 	# Resource 665: the player is frozen for 2 frames after picking a bomb up.
+	# The COUNTDOWN is tick()'s, next to kick_ticks and punch_ticks, not here:
+	# this function returns early for a player who is standing still, so a
+	# player who grabbed a bomb and then did not walk never aged the pause out.
+	# It stuck at 2 forever, and the view draws BPICKUP.ANI's pickup pose for
+	# as long as it is above zero — ahead of the carrying pose — while
+	# draw_bombs_of() skips a carried bomb entirely. A standing grab therefore
+	# made the bomb vanish and left the player frozen mid-pickup, which is
+	# exactly what "the blue glove does nothing" looks like.
 	if p.pickup_pause > 0:
-		p.pickup_pause -= 1
 		return
 
-	# Walking into a bomb kicks it, if the player has the kicker. Tried before
-	# moving, because the kick is what happens INSTEAD of being blocked.
-	if p.can_kick:
-		var ahead := bomb_at(p.tile_x() + step.x, p.tile_y() + step.y)
-		if ahead != null and ahead.at_rest():
-			kick_bomb(p)
-
 	var was := Vector2i(p.x, p.y)
+	# Where a completely free step would have put them, kept so the kick test
+	# below can ask whether anything capped it.
+	var want := Vector2i(p.x, p.y)
 	if step.x != 0:
 		_recentre_y(p)
+		want.x = p.x + step.x * p.speed
 		p.x = _slide_x(p, step.x * p.speed)
 	else:
 		_recentre_x(p)
+		want.y = p.y + step.y * p.speed
 		p.y = _slide_y(p, step.y * p.speed)
+
+	# WALKING INTO A BOMB KICKS IT — on contact, after the move, not before it.
+	# MANUAL.BM: "Allows you to kick any bomb down a hallway."
+	#
+	# This used to run BEFORE the slide, on nothing but "a bomb is in the cell
+	# I face". Turning to face a bomb is what sets p.facing, so the kick fired
+	# on the first tick of the direction key with the player still at the
+	# centre of their own cell, a full cell clear of the bomb: the bomb shot
+	# off before it could be touched. Worse, it made the other two gloves
+	# unreachable for anyone also holding the kicker — you cannot punch or grab
+	# a bomb in front of you if facing it is enough to kick it away, and facing
+	# it is the only way to aim either one.
+	#
+	# The slide above stops the player flush against whatever blocked them, so
+	# "the step came up short" AND "a bomb is the thing ahead" is the contact
+	# the manual means. A wall stops the step too, which is why the bomb lookup
+	# still has to agree before anything is kicked.
+	if p.can_kick:
+		var capped: bool = p.x != want.x if step.x != 0 else p.y != want.y
+		if capped:
+			var ahead := bomb_at(p.tile_x() + step.x, p.tile_y() + step.y)
+			if ahead != null and ahead.at_rest():
+				kick_bomb(p)
 	if stats != null:
 		# Both axes, because re-centring moves the other one. Counter 918 is
 		# "Total Pixel Distances Run" and re-centring is running.
@@ -561,14 +623,19 @@ func _slide_x(p: Player_, delta: int) -> int:
 		var col: int = edge / TILE_W_CP
 		for row in range(top_row, bottom_row + 1):
 			if _player_blocked(col, row):
-				# Stop with the box flush against the blocked cell.
-				return col * TILE_W_CP - TILE_W_CP / 2
+				# Stop with the box flush against the blocked cell — but never
+				# BEHIND where the player already is. A player standing partly
+				# past the flush line (they walked off their own bomb's cell,
+				# say, and turned back) would otherwise be pushed the way they
+				# are not pressing: hold left against the bomb you just left
+				# and you slid right instead.
+				return maxi(p.x, col * TILE_W_CP - TILE_W_CP / 2)
 	else:
 		var edge: int = want - TILE_W_CP / 2
 		var col: int = _floor_div(edge, TILE_W_CP)
 		for row in range(top_row, bottom_row + 1):
 			if _player_blocked(col, row):
-				return (col + 1) * TILE_W_CP + TILE_W_CP / 2
+				return mini(p.x, (col + 1) * TILE_W_CP + TILE_W_CP / 2)
 	return want
 
 
@@ -582,13 +649,13 @@ func _slide_y(p: Player_, delta: int) -> int:
 		var row: int = edge / TILE_H_CP
 		for col in range(left_col, right_col + 1):
 			if _player_blocked(col, row):
-				return row * TILE_H_CP - TILE_H_CP / 2
+				return maxi(p.y, row * TILE_H_CP - TILE_H_CP / 2)
 	else:
 		var edge: int = want - TILE_H_CP / 2
 		var row: int = _floor_div(edge, TILE_H_CP)
 		for col in range(left_col, right_col + 1):
 			if _player_blocked(col, row):
-				return (row + 1) * TILE_H_CP + TILE_H_CP / 2
+				return mini(p.y, (row + 1) * TILE_H_CP + TILE_H_CP / 2)
 	return want
 
 
@@ -642,7 +709,35 @@ static func _move_to_dir(move: int) -> int:
 ##
 ## Grab and spooge are mutually exclusive by the powerups themselves (taking
 ## the grab disables spooging), so one button serves both.
+## TEMPORARY DIAGNOSTIC — set AB_DEBUG_ACTIONS=1 to have every action press
+## explain itself on stdout. Remove once the live glove reports are settled.
+static var _debug_actions: int = -1
+
+func _explain_action(p: Player_) -> void:
+	if _debug_actions == -1:
+		_debug_actions = 1 if OS.get_environment("AB_DEBUG_ACTIONS") != "" else 0
+	if _debug_actions == 0 or p.action == Types_.Action.NONE:
+		return
+	var step: Vector2i = Types_.DIR_VEC[p.facing]
+	var ahead := bomb_at(p.tile_x() + step.x, p.tile_y() + step.y)
+	var under := bomb_at(p.tile_x(), p.tile_y())
+	var carried := -1
+	for b in bombs:
+		if b.carried_by == p.slot:
+			carried = bombs.find(b)
+	print("[act] t=%d slot=%d action=%d held=%s facing=%d tile=(%d,%d) " % [
+			tick_count, p.slot, p.action, p.action_first_held, p.facing,
+			p.tile_x(), p.tile_y()]
+		+ "bombs=%d/%d kick=%s punch=%s grab=%s spooge=%s trig=%d " % [
+			p.bombs_available, p.bombs_total, p.can_kick, p.can_punch,
+			p.can_grab, p.can_spooge, p.trigger_bombs]
+		+ "under=%s ahead=%s(own=%s) carrying=%d pause=%d" % [
+			under != null, ahead != null,
+			ahead != null and ahead.owner == p.slot, carried, p.pickup_pause])
+
+
 func _player_action(p: Player_) -> void:
+	_explain_action(p)
 	match p.action:
 		Types_.Action.FIRST:
 			# THE DISC'S OWN RULE, from MANUAL.BM: "To drop a bomb, press this
@@ -683,7 +778,20 @@ func _player_action(p: Player_) -> void:
 			# activate a Trigger bomb."
 			if not stop_bomb(p):
 				if not punch_bomb(p):
-					trigger_bombs(p)
+					if trigger_bombs(p) == 0 and p.can_punch:
+						# A SWING AT AIR. Nothing to stop, nothing to punch,
+						# nothing to trigger — but a player wearing the Boxing
+						# Glove who presses the action button has to SEE the
+						# glove move, or the button reads as dead and the
+						# powerup reads as broken. That was a live report, and
+						# it is the same complaint an earlier session answered
+						# from the other end by refusing the punch outright;
+						# refusing it silently is what made it unreadable.
+						#
+						# The animation only. No _launch, no bomb, and
+						# deliberately no BOMB_PUNCH sound — that sound is a
+						# bomb being hit, and there is no bomb here.
+						p.punch_ticks = PUNCH_ANIM_TICKS
 
 	p.action = Types_.Action.NONE
 
@@ -1528,12 +1636,12 @@ func _roll_bomb(b: Bomb_) -> void:
 	if _at_cell_centre(b):
 		var push := field.arrow_at(b.tile_x(), b.tile_y())
 		if push != Types_.Dir.NONE and push != b.move_dir:
-			b.move_dir = push
+			_turn_rolling_bomb(b, push)
 			return
 		# A CONVEYOR under a rolling bomb turns it too, at the belt's speed.
 		var carry := field.conveyor_at(b.tile_x(), b.tile_y())
 		if carry != Types_.Dir.NONE:
-			b.move_dir = carry
+			_turn_rolling_bomb(b, carry)
 			b.speed = conveyor_speed()
 
 	# A jelly bomb crossing a cell centre may turn. "at each 0,0 intersection,
@@ -1548,7 +1656,26 @@ func _roll_bomb(b: Bomb_) -> void:
 				if not _bomb_blocked(b, b.tile_x() + v.x, b.tile_y() + v.y):
 					options.append(d)
 			if not options.is_empty():
-				b.move_dir = options[rng.randi_range(0, options.size() - 1)]
+				_turn_rolling_bomb(b,
+					options[rng.randi_range(0, options.size() - 1)])
+
+
+## Turn a rolling bomb, snapping it to the intersection it is turning at.
+##
+## _at_cell_centre() is a TOLERANCE — "within half a step of the centre" —
+## because a bomb moving `speed` centipixels a tick almost never lands exactly
+## on a centre. Turning without closing that gap left the bomb up to half a
+## step off-centre on the axis it was now crossing, and nothing ever pulled it
+## back: every later turn added its own error. A jelly bomb doing its 1-in-3
+## crazy turns drifted visibly off the grid within a few bounces, and its
+## tile_x()/tile_y() flipped a tick early or late against what the player could
+## see, so its bounces off walls and the map border read as random.
+##
+## Players get the same treatment from _recentre_x()/_recentre_y() for the same
+## reason; a bomb has no drift to absorb, so it snaps in one go.
+func _turn_rolling_bomb(b: Bomb_, dir: int) -> void:
+	b.place_at_tile_centre(b.tile_x(), b.tile_y())
+	b.move_dir = dir
 
 
 func _at_cell_centre(b: Bomb_) -> bool:
@@ -1695,14 +1822,44 @@ func _bomb_on_the_head(b: Bomb_) -> void:
 func _landing_cell(b: Bomb_, from_tx: int, from_ty: int, dir: int,
 		max_dist: int) -> Vector2i:
 	var step: Vector2i = Types_.DIR_VEC[dir]
-	var landing := Vector2i(from_tx, from_ty)
-	for n in range(1, max_dist + 1):
+
+	# THE INTENDED SPOT: the full distance out, whatever the arc passed over.
+	# The cells in between are deliberately NOT tested. This loop used to walk
+	# out one cell at a time and `break` on the first blocked one, which is the
+	# exact opposite of what the docstring above it describes and meant a
+	# thrown or punched bomb could never clear a wall: the search stopped at
+	# the brick and the "landing" came back as the thrower's own cell, so the
+	# bomb was set down at their feet. MANUAL.BM is explicit that this is the
+	# point of both abilities — "Throw and punch your bombs over the wall to
+	# destroy your opponents."
+	var target := Vector2i(from_tx + step.x * max_dist,
+		from_ty + step.y * max_dist)
+	if Field_.in_bounds(target.x, target.y) \
+			and not _bomb_blocked(b, target.x, target.y, true):
+		return target
+
+	# Blocked where it meant to land. Carry on in the same direction to the
+	# first cell that will take it — a bomb denied its spot overshoots rather
+	# than dropping into the thing that denied it.
+	var n := max_dist + 1
+	while true:
 		var tx: int = from_tx + step.x * n
 		var ty: int = from_ty + step.y * n
-		if not Field_.in_bounds(tx, ty) or _bomb_blocked(b, tx, ty, true):
+		if not Field_.in_bounds(tx, ty):
 			break
-		landing = Vector2i(tx, ty)
-	return landing
+		if not _bomb_blocked(b, tx, ty, true):
+			return Vector2i(tx, ty)
+		n += 1
+
+	# Nothing beyond it either — the far side is solid all the way to the
+	# arena wall. Fall back toward the thrower and take the nearest cell that
+	# will have it, their own as the last resort.
+	for back in range(max_dist - 1, 0, -1):
+		var tx: int = from_tx + step.x * back
+		var ty: int = from_ty + step.y * back
+		if Field_.in_bounds(tx, ty) and not _bomb_blocked(b, tx, ty, true):
+			return Vector2i(tx, ty)
+	return Vector2i(from_tx, from_ty)
 
 
 ## Send a bomb flying to a cell. The flight time comes from the distance and

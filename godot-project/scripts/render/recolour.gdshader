@@ -71,6 +71,10 @@ render_mode unshaded;
 uniform vec3 target_colour = vec3(0.0, 1.0, 0.0);
 uniform bool tinted = true;
 
+// A whole-actor multiply applied after the recolour — the disease pulse. White
+// is the no-op and the default, so any node that never sets it is unaffected.
+uniform vec3 actor_tint = vec3(1.0, 1.0, 1.0);
+
 // The disc's tables. filter_nearest is not optional: every one of these is a
 // lookup table whose texels are values, not samples, and interpolating between
 // two palette indices produces a third index that means nothing.
@@ -159,4 +163,23 @@ void fragment() {
 		}
 		COLOR = vec4(clamp(out_rgb, vec3(0.0), vec3(1.0)), 1.0);
 	}
+
+	// THE DISEASE PULSE, and anything else that wants to tint a whole actor.
+	//
+	// Every branch above assigns COLOR outright from the texture and the
+	// remap tables, so a per-draw modulate passed to
+	// draw_texture_rect_region() never survived this shader: game_view.gd
+	// computed its disease tint, handed it down through _draw_seq_frame(),
+	// and it was overwritten here. That is why a diseased player looked
+	// exactly like a healthy one however the tint itself was tuned.
+	//
+	// A UNIFORM rather than the vertex COLOR, deliberately. Reading COLOR at
+	// the top of fragment() to recover the modulate does not hold across
+	// Godot's canvas batching — tried, and it multiplied every sprite by
+	// something that was not white, which tests/render_recolour.gd caught as
+	// all ten players collapsing to two dark colours. The node a player is
+	// drawn on already carries per-slot uniforms (player_slot,
+	// target_colour), so one more set the same way is the mechanism that is
+	// known to work here.
+	COLOR.rgb *= actor_tint;
 }

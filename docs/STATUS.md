@@ -1,139 +1,95 @@
-# STATUS — Atomic Bomberman Godot port
+# STATUS — Atomic Bomberman (Godot 4 port)
 
-_Last updated: 2026-09-21 · branch `main` · 1 uncommitted file_
+_Last updated: 2026-09-21 · branch `main` · 7 uncommitted files_
 
 ## Next action
 
-**Live-playtest GRAB (blue glove)**: hold Space to carry a bomb, release to
-throw it. This exact powerup has been "fixed" twice already this session
-(commits `5070741`, `75c4734`) and the second fix has never been confirmed
-live — see `docs/POWERUP_REVIEW_PLAN.md` §7 for exact repro steps before
-reporting it broken again.
+Live-playtest the **punch whiff animation** (`sim.gd:_player_action`, SECOND branch): wear
+only the Boxing Glove, press Enter with no bomb anywhere, and confirm the glove
+visibly swings. It was written in response to a live report and the game was
+closed before it was tested once — the session log for that run recorded zero
+action presses.
 
 ## State
 
-- Same baseline as before: game starts/plays/finishes on the original's own
-  screens, art, sounds and level data — 67 schemes, 13 powerups, 12
-  diseases, campaign mode, server-authoritative WebSocket netplay.
-- This session's bug-hunt round (playtesting + fixes, commits `210aa39`,
-  `5070741`, `75c4734`): level preview now draws real layout not just
-  background; cornerhead no longer replays every variant while trapped;
-  jelly bomb bounce snaps to cell centre (no more sitting-in-the-wall
-  glitch) and keeps its wobble sprite mid-flight; powerup exclusivity
-  matrix fixed to match MANUAL.BM's own table (Trigger↔Jelly, Trigger↔Punch,
-  Grab↔Spooge — was backwards); Super Bad Disease now gives up to 3
-  diseases, not 1; punch no longer plays its animation over a zero-distance
-  blocked throw; options now survive returning to the menu after a match
-  (root cause: `_teardown()` nulled `menu` before a match even began); grab
-  is hold-to-carry/release-to-throw (see Next action — unverified).
-- Invented (no original asset existed): a sickly-green tint pulse on a
-  diseased player, since nothing marked disease state visually before.
-- New feature this session: internet multiplayer via a room-code
-  directory, not a traffic relay — `directory/` (Node, zero deps, own test
-  suite) maps a short code to a dedicated server's `ws://` URL; hosting
-  from the menu now opens a lobby (roster, host presses Start) instead of
-  starting instantly; `scripts/net/directory.gd` is the Godot-side client.
-  All 4 build-order steps done and committed (`75fe013`, `fa47130`,
-  `bb82918`, `4eac232`) — plan doc at
-  `~/.claude/plans/stateless-mapping-mist.md`. **Nothing has left
-  localhost/LAN yet** — see Open questions.
-- `tools/verify.sh` green throughout this session's changes (last full run:
-  all suites passing, counts grew — e.g. `powerups` 168→236 checks,
-  `abilities` 179→181, new `directory` and `net` coverage added).
+- Eight powerup bugs found and fixed this session, all with regression tests in
+  `godot-project/tests/test_abilities.gd` (207 checks). `tools/verify.sh` is
+  green. None of the eight is live-confirmed yet — see "In flight".
+- The previous three rounds of "glove" fixes were aimed at the wrong layer. The
+  sim's ability functions (`punch_bomb`, `grab_bomb`, `stop_bomb`) were correct
+  all along; every real bug was in movement, rendering, a timer that never ran,
+  or a function that was never called. `docs/POWERUP_REVIEW_PLAN.md` has the
+  full write-up per powerup.
+- The T test editor now has the keys needed to test one powerup in isolation:
+  `X` strips a player to newborn, `G` gives the selected powerup directly, `P`
+  pauses, `.` steps one tick. A live state line shows `can_*` flags, facing,
+  and whether a bomb is under/ahead.
+- `docs/POWERUP_TEST_RANGE_PLAN.md` is a delegation-ready plan for the rest of
+  that tooling (steps 3 and 4 are unbuilt: the full on-screen action-history
+  panel, and a single `--test-range` flag).
+- Deliberately NOT built: any change to the player collision box (see Open
+  questions).
 
 ## In flight
 
-- `docs/POWERUP_REVIEW_PLAN.md` (uncommitted, user chose to keep local) —
-  per-powerup bug/status handoff doc, written for delegating a live
-  playtest pass to another agent. GRAB and SPOOGE flagged top priority
-  (GRAB just changed mechanics again; SPOOGE has never been live-tested at
-  all this session, sim-layer only).
+- `godot-project/scripts/sim/sim.gd:~646` — `_explain_action()` and its
+  `_debug_actions` static are **temporary scaffolding**, gated on
+  `AB_DEBUG_ACTIONS=1`. Delete them once the test-range panel (step 3 of
+  `docs/POWERUP_TEST_RANGE_PLAN.md`) replaces them. Two diagnostics for one
+  question is how the next session gets confused.
+- `godot-project/scripts/render/game_view.gd:~745` `_draw_flame_piece()` — the
+  reported "top-centre flame arm sits a few px right" is diagnosed but NOT
+  fixed. Groundwork and the exact next step are in
+  `docs/POWERUP_TEST_RANGE_PLAN.md` under "Still-open bugs", item 2. Short
+  version: flames are positioned by re-centring frame width with
+  `use_hotspot=false`, while every MFLAME hotspot in the pack is the generic
+  synthesised `(w/2, h-1)`. `tools/pack_assets.py:32` claims the ANI carries
+  real per-frame hotspots that "genuinely vary" — verify that against
+  `tools/pack_assets.py` BEFORE touching renderer maths, because it decides
+  whether the fix is in the renderer or in the extractor.
+- Nothing is committed. All eight fixes plus both plan docs are in the working
+  tree.
 
 ## Verify
 
 ```bash
-tools/verify.sh                  # full suite, run from repo root
+tools/verify.sh
 ```
-
-`AB_DATA` overrides where the disc is found (default `../original-game`
-from `godot-project/`). **Never run two Godot processes against this
-project at once** — they share a LAN discovery port and corrupt each
-other's results; `pkill -f Godot.app` before relaunching to test a fix,
-every time — stale-process confusion caused several false "still broken"
-reports this session.
 
 ## Open questions
 
-- **GRAB's hold-to-carry/release-to-throw mechanic** (commit `75c4734`) —
-  live-unconfirmed, see Next action.
-- **SPOOGE** — never live-playtested this session at all, sim-layer only.
-- **Internet multiplayer is untested beyond localhost/LAN.** To actually
-  prove it: deploy `directory/` and `server/` (see each README) to a real
-  VPS, launch the dedicated server with `--directory <url> --public-host
-  <ip-or-domain>`, and join from a genuinely different network. Everything
-  built so far only proves the mechanism works, not that it reaches the
-  open internet.
-- **Menu-hosted (not dedicated-server) internet play has a known gap**: a
-  room code only works if that host's own machine is reachable from the
-  internet (port-forwarded) — the lookup-only directory design (chosen over
-  a full relay) can't solve NAT for a home host. Worth deciding whether
-  that's acceptable or whether the relay alternative from the plan's first
-  draft should be revisited.
-- **AI kicks a bomb before fleeing danger it's standing in** (`ai.gd`,
-  entry 1 before entry 2) — matches the original's own disassembled
-  decision order, so may be intentional fidelity rather than a bug.
-  Flagged for a decision, not fixed either way.
-- Pixels/pad/`.AAF`/`APPLBITE` family — unchanged from before this session,
-  see prior open questions below (carried forward, still true).
-- **Pixels.** The art pipeline is proven; nobody has drawn a replacement
-  set. Until then no build is distributable. `docs/ART.md`.
-- **A pad.** The gamepad layer is tested against synthesised events only;
-  nobody has held a real controller.
-- **`.AAF` is not cracked** — five antialiased fonts from `INSTALL.DAT`.
-  Zero port value (they're the *setup program's* fonts). `docs/ORACLE.md` §9.
-- **`APPLBITE`/`NUCKBLOW`/`ZEN`** — a still-unexplained 73×73 animation
-  family, distinct from cornerhead. Name appears nowhere on the disc's own
-  text.
-- **Death animation/cornerhead netcode sync** — neither is in
-  `Player_.to_bytes()`/`state_hash()`, so a joining client doesn't see
-  either animation correctly. Cosmetic only.
+- **Player collision box, for the user to decide.** With KICK and PUNCH both
+  held, punch is close to unreachable: aiming a glove means facing the bomb,
+  facing it means pressing toward it, and this port's full-cell collision box
+  makes "standing in the next cell" already count as contact, which fires the
+  kick. The original almost certainly used a smaller box with a gap.
+  `docs/BUGS.md` Q5.1 already flags the box as an assumption. Changing it is a
+  real behaviour change affecting all movement, so it was left alone.
+- **Disease tint strength**, unconfirmed live. The pulse reaches the screen now
+  (it never did before), but whether it reads clearly on every player colour
+  has not been seen by a human.
 
 ## Do not redo
 
-- **The default keys are `INPUT.BM`'s, not an invention** — cursor keys +
-  Space + Enter, and R/D/F/G + S + A. Do not "improve" them to WASD.
-- **The test editor is on `T`, not F3** — F3 is macOS's own Mission Control
-  shortcut on most keyboards; the OS eats it before Godot sees it.
-- **The status panel is 42 px** (`Const_.HUD_H`); `FIELD_Y_OFF` is 68.
-- **Flame frames are centred on the cell**, never anchored on their hotspot
-  — centring an odd-width sprite in the 40px-wide cell has an irreducible
-  0.5px error; don't re-litigate this as a rounding bug (`docs/BUGS.md` Q10).
-- **A game left open in another window breaks netplay-adjacent test
-  suites AND causes false "still broken" playtest reports** — this session
-  hit the latter repeatedly: a fix was correct but the tester was still on
-  a stale process. Kill stray headless/GUI Godot processes before either
-  running tests or handing the app back for a retest:
-  `pkill -f Godot.app`.
-- **The movement algorithm is read but deliberately not adopted** (Q5.1).
-- **The AI's search is a graded danger map + BFS, not the original's
-  cloning-walker frontier** — a deliberate, documented simplification
-  (Q5.4), not a bug to "fix" toward fidelity. Its decision ORDER (kick
-  before flee) is a separate, still-open question — see Open questions.
-- **The netplay server-override key is scoped to mid-round demote/restore
-  only**, distinct from the NEW pre-round lobby built this session — don't
-  conflate the two; the lobby (roster + host Start) is a different feature
-  added on top, not a replacement for the override key.
-- **`bmexe.py`'s `--xref` only follows DIRECT call targets** — an
-  indirectly-dispatched function's own resource reads get attributed to
-  whichever function calls it. If a resource's "owning function" via
-  `--xref` doesn't contain the code you expect, read that function's own
-  instructions directly.
-- **The directory service (`directory/`) is a lookup table, not a
-  relay** — no game traffic passes through it, on purpose (chosen over a
-  full relay to keep the build small; see
-  `~/.claude/plans/stateless-mapping-mist.md` for why). Don't "fix" it by
-  routing gameplay bytes through it — that's a different, bigger feature.
-- **GRAB's mechanic has flip-flopped twice** (tap-then-tap → hold-to-carry/
-  release-to-throw) — before changing it again, get an explicit, exact
-  description of the wanted behavior from the user first; guessing burned
-  two iterations already.
+- **Do not re-read `punch_bomb()`/`grab_bomb()` looking for the glove bug.**
+  Three sessions did. They are correct, and were verified again this session
+  through the real keyboard path (synthetic `InputEventKey` → `Keysets` →
+  `set_input` → `tick`, not direct calls). A live "glove does nothing" report
+  is a movement, render or ergonomics problem, not a sim one.
+- **Do not recover a per-draw modulate by reading `COLOR` at the top of
+  `fragment()` in `recolour.gdshader`.** Tried; it does not survive Godot's
+  canvas batching and multiplied every sprite by something that was not white.
+  `tests/render_recolour.gd` caught it as all ten players collapsing to two
+  dark colours. The working mechanism is the `actor_tint` uniform set per slot
+  node, alongside the existing `player_slot`/`target_colour` uniforms.
+- **Do not make a disease tint that leaves the green channel at 1.0.** The
+  original `Color(0.55, 1.0, 0.45)` was invisible on the green player — the one
+  channel it did not touch. All three channels must dim, green least.
+- **Do not "fix" a punch into a wall by refusing it.** An earlier session did,
+  and a test asserted it. MANUAL.BM line 208 is explicit: "Throw and punch your
+  bombs over the wall to destroy your opponents." `_landing_cell()` now flies
+  the full distance and overshoots to the next free cell; it only refuses when
+  the whole line to the arena edge is solid.
+- **A session log showing six bombermen with `--players 1` is not a bug.**
+  Starting a new match from the in-game menu replaces the CLI solo setup with
+  the menu's own roster, AI included. Check the scheme name in the log first.
