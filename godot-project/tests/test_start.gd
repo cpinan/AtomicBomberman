@@ -29,6 +29,7 @@ func _init() -> void:
 	await _test_refusal_does_not_start(t)
 	await _test_escape_comes_back(t)
 	await _test_options_survive_a_match(t)
+	await _test_host_lobby_then_start(t)
 	quit(t.finish())
 
 
@@ -251,6 +252,44 @@ func _test_options_survive_a_match(t: T_) -> void:
 	t.ok(main.menu.team_play, "[invariant] team play survives")
 	t.eq(main.menu.play_time_index, 0, "[invariant] play time survives")
 	t.ok(main.menu.no_music, "[invariant] the music toggle survives")
+	main.free()
+
+
+## Hosting from the menu now opens in a lobby (server.gd's State.WAITING)
+## rather than starting the round the instant the host's own client
+## connects — this drives the real path (menu -> _prepare_setup(true) ->
+## _start_from_menu() -> Mode.HOST) end to end, through main.gd's actual
+## _process()/_input() wiring, not by calling sim/server methods directly.
+func _test_host_lobby_then_start(t: T_) -> void:
+	var main := await _boot()
+	main._prepare_setup(true)
+	main.menu.cursor = Menu_.Item.START
+	main.menu.activate()
+	main._start_from_menu()
+	await process_frame
+	if not t.ok(main.mode == Main.Mode.HOST, "hosting begins"):
+		main.free()
+		return
+
+	for _i in 200:
+		await process_frame
+		if main.client != null and main.client.in_lobby():
+			break
+	if not t.ok(main.client != null and main.client.in_lobby(),
+			"the host's own client reaches the lobby instead of playing at once"):
+		main.free()
+		return
+	t.ok(not main.client.playing(), "[invariant] not playing yet")
+	t.ok(main.client.lobby_is_host, "and knows it's the host")
+	t.ok(main.view != null and main.view.lobby_active,
+		"the view was told to draw the lobby")
+
+	main.client.request_start()
+	for _i in 200:
+		await process_frame
+		if main.client.playing():
+			break
+	t.ok(main.client.playing(), "request_start() begins the round")
 	main.free()
 
 

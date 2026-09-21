@@ -50,6 +50,17 @@ const EDITOR_POWERUP_NAMES := ["bomb", "flame", "disease", "kick", "skate",
 	"punch", "grab", "spooge", "goldflame", "trigger", "jelly",
 	"super bad disease", "random"]
 
+## The pre-game lobby (scripts/net/server.gd's State.WAITING) — no sim exists
+## yet, so `_draw()` cannot fall back to reading one the way it does for
+## gameplay. Plain data, not a Client_ reference, on purpose: this file reads
+## a Sim and now this, and does not otherwise know netcode exists (client.gd's
+## own header comment). main.gd copies these from `client.lobby_*` each frame
+## it isn't yet playing.
+var lobby_active: bool = false
+var lobby_roster: Array = []
+var lobby_is_host: bool = false
+var lobby_room_code: String = ""
+
 ## Which slots THIS viewer actually controls — populated by main.gd from its
 ## own keyset/pad slot lists, the same for local, host and join (a joining
 ## client still drives its own keyset locally and sends the result to the
@@ -211,7 +222,13 @@ func snapshot() -> void:
 
 
 func _draw() -> void:
-	if sim == null or pack == null or not pack.loaded:
+	if sim == null:
+		if lobby_active:
+			_draw_lobby()
+		else:
+			_draw_missing()
+		return
+	if pack == null or not pack.loaded:
 		_draw_missing()
 		return
 
@@ -1120,6 +1137,40 @@ func _draw_debug_grid() -> void:
 			Vector2(Const_.BLOCK_W, Const_.BLOCK_H)),
 			Color(1, 0.3, 0.3, 0.5), false, 1.0)
 		draw_circle(pos, 1.5, Color(1, 1, 0))
+
+
+## The pre-game lobby: room code (if this session registered one with a
+## directory), the roster so far, and a prompt telling the host they can
+## start it. Plain text over a dark panel — invented wholesale, like the
+## disease tint elsewhere in this file; there is no original screen for a
+## lobby to draw from, because the original never had one either (server.gd's
+## own doc comment on `override_slot()`).
+func _draw_lobby() -> void:
+	var font := ThemeDB.fallback_font
+	var lines := PackedStringArray()
+	lines.append("WAITING FOR PLAYERS" if not lobby_room_code.is_empty()
+		else "WAITING IN LOBBY")
+	if not lobby_room_code.is_empty():
+		lines.append("Room code: %s" % lobby_room_code)
+	lines.append("")
+	if lobby_roster.is_empty():
+		lines.append("  (nobody here yet)")
+	for entry in lobby_roster:
+		var e: Dictionary = entry
+		lines.append("  slot %d — %s" % [int(e.get("slot", 0)),
+			String(e.get("name", "?"))])
+	lines.append("")
+	lines.append("Press Enter to start" if lobby_is_host
+		else "Waiting for the host to start…")
+
+	var panel_h := 20.0 + 16.0 * lines.size()
+	var panel := Rect2(Const_.SCREEN_W / 2.0 - 180, Const_.SCREEN_H / 2.0
+		- panel_h / 2.0, 360, panel_h)
+	draw_rect(panel, Color(0, 0, 0, 0.75))
+	draw_rect(panel, Color(1, 0.95, 0.5, 0.6), false, 2.0)
+	for i in lines.size():
+		draw_string(font, panel.position + Vector2(20, 24 + i * 16),
+			lines[i], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 0.9))
 
 
 ## The cursor cell and the legend of what every editor key does. Kept to one

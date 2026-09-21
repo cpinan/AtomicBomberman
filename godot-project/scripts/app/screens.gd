@@ -113,6 +113,16 @@ var join_url: String = ""
 var net_games: Array = []
 var net_cursor: int = 0
 
+## A room code being typed on JOIN_NETWORK, for a game that isn't on this LAN
+## — see scripts/net/directory.gd. main.gd appends/removes characters as they
+## are typed and reads this back to start a lookup; nothing here talks to the
+## directory itself, matching net_games' own "this model does no networking"
+## rule above.
+var typed_code: String = ""
+## True while main.gd has a directory lookup in flight for `typed_code`, so
+## the screen can say "looking up…" instead of sitting there looking stuck.
+var looking_up: bool = false
+
 ## First visible line of a text page — About Bomberman and the Online Manual
 ## are the disc's own CREDITS.BM and MANUAL.BM, both far longer than a screen.
 ## Reset when a screen is opened.

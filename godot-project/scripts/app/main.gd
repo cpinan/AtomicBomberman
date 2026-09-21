@@ -120,6 +120,7 @@ const Screens_ := preload("res://scripts/app/screens.gd")
 const Roulette_ := preload("res://scripts/app/roulette.gd")
 const Server_ := preload("res://scripts/net/server.gd")
 const Client_ := preload("res://scripts/net/client.gd")
+const Directory_ := preload("res://scripts/net/directory.gd")
 const Stats_ := preload("res://scripts/core/stats.gd")
 
 const GameView := preload("res://scripts/render/game_view.gd")
@@ -263,6 +264,17 @@ var mode: int = Mode.LOCAL
 var server: Server_ = null
 var client: Client_ = null
 var player_name: String = "player"
+
+## The room-code lookup (directory/, scripts/net/directory.gd) — null unless
+## a --directory URL was given, or a code was typed on the JOIN_NETWORK
+## screen. Hosting registers with it once and re-registers (heartbeats) on
+## `_directory_heartbeat_s` so the room does not expire under directory/'s
+## own TTL while the game is still up.
+var directory: Directory_ = null
+var _directory_url: String = ""
+var _directory_server_url: String = ""
+var _directory_heartbeat_s: float = 0.0
+const DIRECTORY_HEARTBEAT_SECONDS := 20.0
 
 
 func _ready() -> void:
@@ -554,6 +566,14 @@ func _teardown() -> void:
 	if server != null:
 		server.close()
 		server = null
+	# A hosting session's room, if it had one — a stale heartbeat for a game
+	# that no longer exists would otherwise keep re-registering it. A join's
+	# in-flight lookup (if any) is simply abandoned; _join_from_screen()
+	# already read out the url it needed before this ever runs.
+	directory = null
+	_directory_url = ""
+	_directory_server_url = ""
+	_directory_heartbeat_s = 0.0
 	if sfx != null:
 		sfx.stop_all()
 	if view != null:
@@ -655,7 +675,14 @@ func _start_from_args(args: Dictionary, ready_scheme: Scheme_ = null) -> void:
 			var port := int(args.get("dedicated", args.get("serve", 47600)))
 			server = Server_.new()
 			server.stats = stats
-			if not server.listen(port, scheme_source, level, round_seed):
+			# A DEDICATED process has no local player to press Start — nobody
+			# would ever leave the lobby — so it keeps the old immediate-start
+			# behaviour. A menu-hosted game (Mode.HOST) opens a lobby: the
+			# host's own client is about to connect below, same as any guest,
+			# and gets a roster to look at and a Start to press.
+			var open_lobby := mode == Mode.HOST
+			if not server.listen(port, scheme_source, level, round_seed,
+					false, open_lobby):
 				push_error("cannot listen on %d" % port)
 				_quit(2)
 				return
@@ -669,6 +696,23 @@ func _start_from_args(args: Dictionary, ready_scheme: Scheme_ = null) -> void:
 			if int(args.get("wins", 0)) > 0:
 				server.the_match.wins_to_win = int(args["wins"])
 			server.the_match.win_by_kills = bool(args.get("kill-total", false))
+			# A room code, for someone who is not on this LAN — directory/
+			# never sees game traffic, only this one URL. Silently skipped
+			# without --public-host: this process has no way to know what
+			# address reaches it from outside its own network, and a wrong
+			# guess is worse than no code at all.
+			if args.has("directory") and args.has("public-host"):
+				_directory_url = str(args["directory"])
+				var public_host := str(args["public-host"])
+				_directory_server_url = "ws://%s:%d" % [public_host, port]
+				directory = Directory_.new()
+				directory.registered.connect(func(code: String):
+					print("main: registered with the directory as %s" % code))
+				directory.register_failed.connect(func(reason: String):
+					push_warning("main: directory registration failed: %s"
+						% reason))
+				directory.register(_directory_url, _directory_server_url,
+					player_name)
 			if mode == Mode.HOST:
 				client = Client_.new()
 				client.round_started.connect(_on_client_round_started)
@@ -965,6 +1009,7 @@ func _builtin_scheme() -> Scheme_:
 func _process(delta: float) -> void:
 	if stats != null:
 		stats.bump(Stats_.C.FRAMES_RENDERED)
+	_poll_directory(delta)
 	# A screen is not a simulation, but it does animate — so it gets the same
 	# fixed tick and nothing else here runs while one is up.
 	if mode == Mode.MENU:
@@ -1132,6 +1177,15 @@ func _poll_client(delta: float) -> void:
 			_quit(0)
 			return
 		if view != null:
+			view.lobby_active = client.in_lobby()
+			if view.lobby_active:
+				view.lobby_roster = client.lobby_roster
+				view.lobby_is_host = client.lobby_is_host
+				# Only ever set when THIS process is the one that registered a
+				# room — a joining client typed the code in already and has no
+				# reason to be told it back.
+				view.lobby_room_code = directory.last_code \
+					if directory != null and mode == Mode.HOST else ""
 			view.queue_redraw_all()
 		return
 
@@ -1642,6 +1696,17 @@ func _input(event: InputEvent) -> void:
 	if mode == Mode.MENU:
 		_menu_input(event)
 		return
+	# The lobby's own Start, ahead of keys.handle() below — there is no sim
+	# yet for a keyset edge to mean anything to, and the host is the only one
+	# this does anything for (client.gd's request_start(), server.gd's own
+	# check that the sender is host_peer_id).
+	if client != null and client.in_lobby() and event is InputEventKey \
+			and (event as InputEventKey).pressed:
+		var lobby_key := (event as InputEventKey).keycode
+		if lobby_key == KEY_ENTER or lobby_key == KEY_KP_ENTER \
+				or lobby_key == KEY_SPACE:
+			client.request_start()
+			return
 	if keys != null:
 		keys.handle(event)
 	if pads != null:
@@ -1794,6 +1859,30 @@ func _menu_input(event: InputEvent) -> void:
 			menu_view.queue_redraw()
 		return
 
+	# A room code typed on JOIN_NETWORK — directory/'s own alphabet is
+	# letters and digits, so anything else is just not a character this field
+	# accepts, rather than something to reject with a message. Handled ahead
+	# of the keycode match below so Up/Down/Enter/arrows on this same screen
+	# still reach it unconsumed.
+	if screens != null and screens.cursor == Screens_.Menu.JOIN_NETWORK \
+			and not on_options and not on_setup:
+		if key.keycode == KEY_BACKSPACE:
+			screens.typed_code = screens.typed_code.substr(0,
+				maxi(0, screens.typed_code.length() - 1))
+			screens.refusal = ""
+			if menu_view != null:
+				menu_view.queue_redraw()
+			return
+		var code := key.unicode
+		var is_alnum := (code >= 48 and code <= 57) \
+			or (code >= 65 and code <= 90) or (code >= 97 and code <= 122)
+		if is_alnum and screens.typed_code.length() < 5:
+			screens.typed_code += String.chr(code).to_upper()
+			screens.refusal = ""
+			if menu_view != null:
+				menu_view.queue_redraw()
+			return
+
 	match key.keycode:
 		KEY_UP, KEY_W:
 			if on_options or on_setup:
@@ -1858,6 +1947,12 @@ func _menu_input(event: InputEvent) -> void:
 				# twinkling.
 				roulette.skip()
 				_take_the_prize()
+			elif screens != null and screens.cursor == Screens_.Menu.JOIN_NETWORK \
+					and not screens.typed_code.is_empty():
+				# A typed code takes priority over a LAN pick — typing one at
+				# all is a deliberate choice to join by code, not a LAN game
+				# that happens to be sitting in the list.
+				_join_by_code()
 			elif screens != null:
 				var was_screen := screens.screen
 				match screens.activate():
@@ -2011,6 +2106,67 @@ func _join_from_screen() -> void:
 	var args := _args.duplicate()
 	args["join"] = url
 	_start_from_args(args)
+
+
+## The JOIN_NETWORK screen's code-entry field, submitted. Looks the code up
+## with whatever directory --directory named (a joiner needs the same
+## directory URL the host registered with — there's no way to guess it), and
+## joins on success exactly the way picking a LAN game already does.
+func _join_by_code() -> void:
+	if screens == null or screens.typed_code.is_empty():
+		return
+	if not _args.has("directory"):
+		screens.refusal = "no --directory given: nothing to look codes up in"
+		return
+	if directory == null:
+		directory = Directory_.new()
+	if directory.busy():
+		return
+	_directory_url = str(_args["directory"])
+	screens.looking_up = true
+	screens.refusal = ""
+	directory.lookup(_directory_url, screens.typed_code)
+
+
+func _poll_directory(delta: float) -> void:
+	if directory == null:
+		return
+	directory.poll()
+
+	# A joiner's lookup resolving is the one case this has to reach into
+	# `screens` for — everything else (a host's heartbeat) is self-contained.
+	if not directory.looked_up.is_connected(_on_directory_looked_up):
+		directory.looked_up.connect(_on_directory_looked_up)
+	if not directory.lookup_failed.is_connected(_on_directory_lookup_failed):
+		directory.lookup_failed.connect(_on_directory_lookup_failed)
+
+	# Heartbeat: only while actually hosting (a code was registered), and
+	# well inside directory/'s own TTL — see DIRECTORY_HEARTBEAT_SECONDS.
+	if mode != Mode.HOST and mode != Mode.DEDICATED:
+		return
+	if directory.last_code.is_empty():
+		return
+	_directory_heartbeat_s += delta
+	if _directory_heartbeat_s >= DIRECTORY_HEARTBEAT_SECONDS:
+		_directory_heartbeat_s = 0.0
+		if not directory.busy():
+			directory.register(_directory_url, _directory_server_url,
+				player_name)
+
+
+func _on_directory_looked_up(url: String, _name: String) -> void:
+	if screens == null:
+		return
+	screens.looking_up = false
+	screens.join_url = url
+	_join_from_screen()
+
+
+func _on_directory_lookup_failed(reason: String) -> void:
+	if screens == null:
+		return
+	screens.looking_up = false
+	screens.refusal = "that code: %s" % reason
 
 
 func _notification(what: int) -> void:

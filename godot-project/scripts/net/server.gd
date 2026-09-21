@@ -569,17 +569,20 @@ func _send(to: int, data: PackedByteArray) -> void:
 ## Bots live on the SERVER only. A client is told about them through the same
 ## snapshots as everyone else and never runs the AI itself, which is what keeps
 ## the state hashes equal.
+## Callable before a lobby room has started (`sim` is null): `_bots` is what
+## `_start_round()`/`_begin_from_lobby()` reads to fill the same seats once
+## the round actually exists, so recording the slot is all there is to do
+## until then.
 func add_bots(count: int) -> void:
 	var added := 0
 	for slot in range(Const_.PLAYER_COUNT - 1, -1, -1):
 		if added >= count:
 			break
-		if _slot_taken(slot) or sim.is_bot(slot):
+		if _slot_taken(slot) or (sim != null and sim.is_bot(slot)) \
+				or (sim == null and _bots.has(slot)):
 			continue
-		sim.add_bot(slot)
-		# Remembered, because _start_round() builds a new Sim and the bots
-		# would otherwise last exactly one round — leaving a server that still
-		# ticks, still accepts joins, and has nobody in it.
+		if sim != null:
+			sim.add_bot(slot)
 		if not _bots.has(slot):
 			_bots.append(slot)
 		added += 1
@@ -605,13 +608,15 @@ func _match_packet() -> PackedByteArray:
 
 
 ## Fill exactly these slots with bots. What the menu's ten-slot model needs:
-## add_bots(n) can only say "how many", and the menu says "which".
+## add_bots(n) can only say "how many", and the menu says "which". Same
+## before-the-round-exists case as add_bots() above — sim may be null.
 func add_bot_slots(which: Array) -> void:
 	for slot in which:
 		var i := int(slot)
 		if i < 0 or i >= Const_.PLAYER_COUNT or _slot_taken(i):
 			continue
-		sim.add_bot(i)
+		if sim != null:
+			sim.add_bot(i)
 		if not _bots.has(i):
 			_bots.append(i)
 	_note("%d bot slots set" % _bots.size())

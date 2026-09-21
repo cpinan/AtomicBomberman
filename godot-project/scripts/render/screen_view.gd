@@ -167,21 +167,31 @@ func _draw_net_games() -> void:
 	# text reads over the starfield.
 	var x := 300.0
 	var y := 392.0
-	draw_rect(Rect2(x - 12, y - 22, Const_.SCREEN_W - x - 4, 84),
+	# One extra row for the code-entry line below the LAN list — invented,
+	# same as the lobby screen: there's nothing on the disc a room code could
+	# have come from, because the original never left the LAN.
+	draw_rect(Rect2(x - 12, y - 22, Const_.SCREEN_W - x - 4, 100),
 		Color(0, 0, 0, 0.55))
 	_shadowed(small, Vector2(x, y), Messages_.NET_GAMES_AVAILABLE, INK)
 	y += 18.0
 	if screens.net_games.is_empty():
 		_shadowed(small, Vector2(x, y), Messages_.NET_GAMES_NONE,
 			Color(1, 0.7, 0.5))
-		return
-	for i in mini(screens.net_games.size(), 3):
-		var game = screens.net_games[i]
-		var chosen: bool = i == screens.net_cursor
-		_shadowed(small, Vector2(x, y),
-			("> " if chosen else "  ") + game.row(Messages_.NET_GAME_ROW),
-			Color(1, 0.95, 0.6) if chosen else INK)
 		y += 16.0
+	else:
+		for i in mini(screens.net_games.size(), 3):
+			var game = screens.net_games[i]
+			var chosen: bool = i == screens.net_cursor
+			_shadowed(small, Vector2(x, y),
+				("> " if chosen else "  ") + game.row(Messages_.NET_GAME_ROW),
+				Color(1, 0.95, 0.6) if chosen else INK)
+			y += 16.0
+
+	var code_line := "Or type a room code: %s_" % screens.typed_code
+	if screens.looking_up:
+		code_line = "Looking up %s…" % screens.typed_code
+	_shadowed(small, Vector2(x, y), code_line,
+		Color(1, 0.95, 0.6) if not screens.typed_code.is_empty() else INK_DIM)
 
 
 func _draw_setup() -> void:
