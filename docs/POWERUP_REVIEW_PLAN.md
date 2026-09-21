@@ -67,6 +67,69 @@ SUPER_BAD giving 3 at once, and every animation sequence name the view asks
 for (`punch east green`, `kick east`, `pickup east green`, `bombwalk east
 green`) existing in the real pack. Those are not where the bugs were.
 
+## Session 3 — read against BM95.EXE, not against the manual
+
+`tools/bmexe.py` can disassemble the original. Three powerup rules were read
+straight out of it and this port disagreed with all three. Each fix below
+cites the address it came from, so the next reader can check the claim instead
+of trusting it. Regression tests are in `tests/test_abilities.gd`.
+
+- **`0x41EE51` — the kick gate.** The original computes the player's signed
+  offset from their cell centre ALONG the direction they face (`0x426599`
+  returns `((px - field_x) mod cell_w) - cell_w/2`), and refuses the kick
+  unless that offset is exactly 0. It then requires the kick powerup, a bomb
+  in the cell ahead, **and the cell BEYOND the bomb to be free** — `0x41EEAC`
+  computes bomb_tile + dir and calls `0x41E5C3`, which is "no bomb there AND
+  the cell itself empty". This port kicked without that last test, so a bomb
+  flat against a wall played the kick sound and animation over a bomb that
+  could not move. It also mattered for the gloves: aiming a punch or a grab
+  means facing the bomb, so for a player who also held the kicker there was no
+  situation left in which either glove was reachable. The wall case is exactly
+  MANUAL.BM's Wallybomb advice, and it now works.
+- **`0x42464B` — re-kicking.** The original's `kick_bomb(bomb, dir)` tests
+  "already moving" against "direction differs" and, when both hold, rewrites
+  the bomb's x and y to its tile centre before taking the new direction. Its
+  kick sound plays only when the direction changed or the bomb was at rest.
+  This port refused to kick a moving bomb at all, so a rolling bomb could
+  never be turned.
+- **`0x423A1E` — the jelly crazy turn.** It is `rand()%2 -> {0,1}`, doubled to
+  `{0,2}`, then `dir = (dir + {0,2} - 1) & 3`: a quarter turn, left or right.
+  It cannot reverse and it cannot carry straight on, and the original does not
+  filter the result against what is blocked — it takes the turn and lets the
+  next tick's ordinary bounce deal with a wall. This port picked freely among
+  all four directions filtered by what was unblocked, producing both outcomes
+  the original cannot.
+
+### Confirmed the same, so leave them alone
+
+- `0x41EEE8` — movement is blocked by the cell ahead only when the along-axis
+  offset is >= 0, which is what lets a player always move back toward their own
+  cell centre. This port's full-cell collision box produces the same stopping
+  positions, so the "should the box be smaller" question raised last session is
+  **closed**: the original kicks from the adjacent cell centre too. The
+  kick/punch conflict was never the box — it was the missing "cell beyond must
+  be free" test above.
+- `0x424987` — a bomb can be punched in states 0, 1 and 3 (at rest, rolling,
+  and one more), but not 2 (already flying). This port allows the same set.
+
+### NOT yet matched — the biggest remaining difference
+
+**A punched bomb travels in one-cell HOPS, not a single flight to a computed
+landing cell.** `0x4243F5` onward: the bomb carries a hop counter at struct
+offset `+0x48` and a within-hop distance at `+0x46`. The render height is
+`sin(progress) * arc`, where the arc is resource 660 (65) while the hop
+counter is under 3 and resource 661 (20) from hop 3 onward — which is the real
+meaning of "initial three-space bounce height" versus "subsequent one-space
+bounces". The same counter gates the jelly crazy turn (`0x423991`: no turn
+until the counter reaches 3), so the initial three cells of a punch are
+straight and only the bouncing afterwards can wander.
+
+This port instead computes a landing cell up front (`_landing_cell()`) and
+interpolates one flight to it. That is why `punch_bomb()` needs a "nowhere to
+go" refusal at all — the original never asks the question, it just starts
+hopping. Reworking the flight into per-cell hops with a hop counter is the
+next substantial piece of work and was deliberately not started this session.
+
 ## How to use this doc
 
 Every powerup below has four fields:

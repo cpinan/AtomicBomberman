@@ -585,7 +585,25 @@ func _move_player(p: Player_) -> void:
 		var capped: bool = p.x != want.x if step.x != 0 else p.y != want.y
 		if capped:
 			var ahead := bomb_at(p.tile_x() + step.x, p.tile_y() + step.y)
-			if ahead != null and ahead.at_rest():
+			# THE CELL BEYOND THE BOMB MUST BE FREE — BM95.EXE 0x41EEAC.
+			#
+			# The original computes the bomb's cell plus the same direction
+			# again and calls its "is this cell free" predicate (0x41E5C3: no
+			# bomb there AND the cell itself empty) before kicking. A bomb
+			# with a wall, a brick or another bomb directly behind it is NOT
+			# kicked — the player is simply blocked by it.
+			#
+			# This port kicked regardless, which cost two things. A bomb
+			# against a wall played the kick sound and animation over a bomb
+			# that could not move, and — because aiming a glove means facing
+			# the bomb — it took away the one situation in which the Boxing
+			# Glove is reachable for a player who also holds the kicker. That
+			# situation is MANUAL.BM's own Wallybomb advice: "Throw and punch
+			# your bombs over the wall."
+			var beyond_x: int = p.tile_x() + step.x * 2
+			var beyond_y: int = p.tile_y() + step.y * 2
+			if ahead != null and Field_.in_bounds(beyond_x, beyond_y) \
+					and not _player_blocked(beyond_x, beyond_y):
 				kick_bomb(p)
 	if stats != null:
 		# Both axes, because re-centring moves the other one. Counter 918 is
@@ -1649,15 +1667,40 @@ func _roll_bomb(b: Bomb_) -> void:
 	# crazily" — resource 667.
 	if b.jelly_bounce and _at_cell_centre(b):
 		if rng.randi_range(1, Values_.V[Const_.Res.JELLY_TURN_CHANCE]) == 1:
-			var options: Array[int] = []
-			for d in [Types_.Dir.UP, Types_.Dir.DOWN, Types_.Dir.LEFT,
-					Types_.Dir.RIGHT]:
-				var v: Vector2i = Types_.DIR_VEC[d]
-				if not _bomb_blocked(b, b.tile_x() + v.x, b.tile_y() + v.y):
-					options.append(d)
-			if not options.is_empty():
-				_turn_rolling_bomb(b,
-					options[rng.randi_range(0, options.size() - 1)])
+			# A QUARTER TURN, LEFT OR RIGHT — BM95.EXE 0x423A1E:
+			#
+			#     rand() % 2 -> {0, 1}, doubled -> {0, 2}
+			#     dir = (dir + {0,2} - 1) & 3
+			#
+			# which over the original's 0..3 direction encoding is exactly
+			# "turn ninety degrees one way or the other". It never reverses
+			# and never keeps going straight.
+			#
+			# This port picked freely among all four directions, filtered by
+			# what was unblocked — so a jelly bomb could double back on itself
+			# or carry straight on through the roll, neither of which the
+			# original can produce. The filtering goes too: the original does
+			# not test the new direction at all, it just takes it and lets the
+			# next tick's ordinary bounce handle a wall.
+			_turn_rolling_bomb(b,
+				_quarter_turn(b.move_dir, rng.randi_range(0, 1) == 1))
+
+
+## The two directions ninety degrees off this one, `right` choosing which.
+## BM95.EXE does this arithmetically over its own 0..3 encoding ((d±1) & 3);
+## this enum is not that encoding, so the same rule is written out rather than
+## faked with modular arithmetic that would only coincidentally agree.
+static func _quarter_turn(dir: int, right: bool) -> int:
+	match dir:
+		Types_.Dir.UP:
+			return Types_.Dir.RIGHT if right else Types_.Dir.LEFT
+		Types_.Dir.DOWN:
+			return Types_.Dir.LEFT if right else Types_.Dir.RIGHT
+		Types_.Dir.LEFT:
+			return Types_.Dir.UP if right else Types_.Dir.DOWN
+		Types_.Dir.RIGHT:
+			return Types_.Dir.DOWN if right else Types_.Dir.UP
+	return dir
 
 
 ## Turn a rolling bomb, snapping it to the intersection it is turning at.
@@ -1901,13 +1944,29 @@ func kick_bomb(p: Player_) -> bool:
 	var b := bomb_at(p.tile_x() + step.x, p.tile_y() + step.y)
 	if b == null:
 		return false
+	# A MOVING BOMB KICKED THE OTHER WAY SNAPS TO ITS CELL CENTRE FIRST —
+	# BM95.EXE 0x42464B, which tests "already moving" against "direction
+	# differs" and, when both hold, rewrites the bomb's x and y to the centre
+	# of the tile it is on before taking the new direction. Without it a bomb
+	# caught mid-cell reverses from wherever it happened to be and spends the
+	# rest of its life off the grid, which is the same drift _turn_rolling_bomb()
+	# exists to prevent for a jelly turn.
+	#
+	# The sound follows the original's own condition rather than firing on
+	# every kick: it plays when the direction changes or the bomb was at rest,
+	# so re-kicking a bomb along the direction it is already rolling is silent.
+	var was_moving: bool = b.move_dir != Types_.Dir.NONE
+	var changed: bool = b.move_dir != p.facing
+	if was_moving and changed:
+		b.place_at_tile_centre(b.tile_x(), b.tile_y())
 	b.move_dir = p.facing
 	b.speed = Values_.V[Const_.Res.KICKED_BOMB_SPEED]
 	b.jelly_bounce = p.jelly_bombs
 	b.kicked_by = p.slot
 	# Long enough to see: KICK.ANI's own sequences are four frames.
 	p.kick_ticks = KICK_ANIM_TICKS
-	_play(p.slot, Types_.SoundEffect.BOMB_KICK)
+	if changed or not was_moving:
+		_play(p.slot, Types_.SoundEffect.BOMB_KICK)
 	return true
 
 

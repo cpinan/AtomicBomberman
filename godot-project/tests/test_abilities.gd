@@ -44,6 +44,9 @@ func _init() -> void:
 	_test_a_rolling_bomb_stays_grid_aligned(t)
 	_test_disease_passes_by_contact(t)
 	_test_a_thrown_bomb_clears_a_wall(t)
+	_test_kick_needs_somewhere_to_go(t)
+	_test_rekicking_a_rolling_bomb(t)
+	_test_jelly_turns_are_quarter_turns(t)
 	quit(t.finish())
 
 
@@ -147,16 +150,19 @@ func _test_jelly(t: T_) -> void:
 		sim.tick()
 	t.ok(b.jelly_bounce, "the kicked bomb is a jelly bomb")
 
-	# It must bounce rather than stop. Run long enough to reach the wall and
-	# come back past where it started.
+	# It must bounce rather than stop. Run until the first bounce, which is
+	# what WOBBLE marks — not until a specific direction: a jelly bomb also
+	# takes random quarter turns on the way (BM95.EXE 0x423A1E), so which wall
+	# it reaches first is not fixed. That it bounces off whatever it reaches,
+	# instead of coming to rest the way an ordinary bomb does, is the claim.
 	var bounced := false
 	for _i in 200:
 		sim.tick()
-		if b.move_dir == Types_.Dir.LEFT:
+		if b.state == Types_.BombState.WOBBLE:
 			bounced = true
 			break
 	t.ok(bounced, "a jelly bomb bounces off the wall instead of stopping")
-	t.eq(b.state, Types_.BombState.WOBBLE, "and goes into its wobble state")
+	t.ok(b.move_dir != Types_.Dir.NONE, "and is still moving after it")
 	# The bounce must SNAP to the cell it bounced off of. Before this was
 	# fixed, the half-cell lookahead let the bomb creep right up to the wall
 	# and reverse direction from wherever it happened to be, so the sprite
@@ -1143,3 +1149,143 @@ func _test_a_thrown_bomb_clears_a_wall(t: T_) -> void:
 	t.ok(b.tile_x() > 3, "and it lands PAST the wall, not at the thrower's feet")
 	t.eq(sim.field.brick[Field_.idx(3, 5)], Types_.Brick.SOLID,
 		"the wall it flew over is untouched")
+
+
+## A BOMB WITH NOWHERE TO ROLL IS NOT KICKED — BM95.EXE 0x41EEAC.
+##
+## The original computes the bomb's cell plus the same direction again and
+## calls its "is this cell free" predicate (0x41E5C3: no bomb there AND the
+## cell itself empty) before kicking at all. This port kicked regardless, so a
+## bomb flat against a wall played the kick sound and animation over a bomb
+## that could not move — and, because aiming a glove means facing the bomb, it
+## removed the one case where the Boxing Glove is usable by a player who also
+## holds the kicker. MANUAL.BM's Wallybomb advice is exactly that case.
+func _test_kick_needs_somewhere_to_go(t: T_) -> void:
+	# A wall directly behind the bomb: no kick, the player is simply blocked.
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	p.place_at_tile_centre(4, 5)
+	sim.give_powerup(p, Types_.PowerUp.KICK)
+	var b := sim.place_bomb(p)
+	b.place_at_tile_centre(5, 5)
+	sim.field.brick[Field_.idx(6, 5)] = Types_.Brick.SOLID
+	p.move = Types_.MoveState.RIGHT
+	for _i in 12:
+		sim.tick()
+	t.eq(b.move_dir, Types_.Dir.NONE,
+		"a bomb with a wall behind it is not kicked")
+	t.eq(b.tile_x(), 5, "and it has not moved")
+	t.eq(p.kick_ticks, 0, "no kick animation plays either")
+
+	# Another BOMB behind it counts as blocked too — 0x41E5C3 tests for a bomb
+	# before it tests the cell.
+	var s2 := _sim(1)
+	var p2: Player_ = s2.players[0]
+	p2.place_at_tile_centre(4, 5)
+	s2.give_powerup(p2, Types_.PowerUp.KICK)
+	s2.give_powerup(p2, Types_.PowerUp.BOMB)
+	var near := s2.place_bomb(p2)
+	near.place_at_tile_centre(5, 5)
+	var far := s2.place_bomb(p2)
+	far.place_at_tile_centre(6, 5)
+	p2.move = Types_.MoveState.RIGHT
+	for _i in 12:
+		s2.tick()
+	t.eq(near.move_dir, Types_.Dir.NONE,
+		"a bomb with another bomb behind it is not kicked")
+
+	# Clear floor behind it: kicked, as before.
+	var s3 := _sim(1)
+	var p3: Player_ = s3.players[0]
+	p3.place_at_tile_centre(4, 5)
+	s3.give_powerup(p3, Types_.PowerUp.KICK)
+	var b3 := s3.place_bomb(p3)
+	b3.place_at_tile_centre(5, 5)
+	p3.move = Types_.MoveState.RIGHT
+	for _i in 12:
+		s3.tick()
+	t.eq(b3.move_dir, Types_.Dir.RIGHT,
+		"with clear floor behind it, the kick still happens")
+
+
+## RE-KICKING A ROLLING BOMB — BM95.EXE 0x42464B.
+##
+## The original's kick_bomb() tests "already moving" against "direction
+## differs" and, when both hold, rewrites the bomb's x and y to the centre of
+## the tile it is on before taking the new direction. This port refused to
+## kick a moving bomb at all (it required at_rest()), so a bomb could never be
+## turned once rolling.
+func _test_rekicking_a_rolling_bomb(t: T_) -> void:
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	p.place_at_tile_centre(4, 5)
+	sim.give_powerup(p, Types_.PowerUp.KICK)
+	var b := sim.place_bomb(p)
+	b.place_at_tile_centre(5, 5)
+	b.fuze = 100000
+	p.move = Types_.MoveState.RIGHT
+	for _i in 12:
+		sim.tick()
+	t.eq(b.move_dir, Types_.Dir.RIGHT, "rolling right")
+
+	# Catch it from below and kick it upward: it must turn, and land exactly
+	# on the grid rather than carrying its mid-cell offset into the new axis.
+	p.place_at_tile_centre(b.tile_x(), b.tile_y() + 1)
+	p.facing = Types_.Dir.UP
+	t.ok(sim.kick_bomb(p), "a rolling bomb can be kicked again")
+	t.eq(b.move_dir, Types_.Dir.UP, "and it takes the new direction")
+	t.eq(b.x % Bomb_.TILE_W_CP, Bomb_.TILE_W_CP / 2,
+		"snapped to the cell centre in x")
+	t.eq(b.y % Bomb_.TILE_H_CP, Bomb_.TILE_H_CP / 2,
+		"snapped to the cell centre in y")
+
+
+## A JELLY BOMB'S CRAZY TURN IS A QUARTER TURN — BM95.EXE 0x423A1E:
+##
+##     rand() % 2 -> {0, 1}, doubled -> {0, 2}
+##     dir = (dir + {0,2} - 1) & 3
+##
+## which over the original's 0..3 direction encoding is "ninety degrees one way
+## or the other". It cannot reverse and it cannot carry straight on. This port
+## picked freely among all four directions filtered by what was unblocked, so
+## it produced both of the outcomes the original cannot.
+func _test_jelly_turns_are_quarter_turns(t: T_) -> void:
+	# The rule itself, exhaustively. Both choices, every direction, always
+	# perpendicular and never the reverse.
+	for dir in [Types_.Dir.UP, Types_.Dir.DOWN, Types_.Dir.LEFT,
+			Types_.Dir.RIGHT]:
+		var a: int = Sim_._quarter_turn(dir, true)
+		var b: int = Sim_._quarter_turn(dir, false)
+		t.ok(a != dir and b != dir, "a quarter turn never keeps the heading")
+		t.ok(a != Sim_._opposite(dir) and b != Sim_._opposite(dir),
+			"and never reverses it")
+		t.ok(a != b, "the two choices are distinct")
+		# Perpendicular means the dot product of the step vectors is zero.
+		var v0: Vector2i = Types_.DIR_VEC[dir]
+		var va: Vector2i = Types_.DIR_VEC[a]
+		t.eq(v0.x * va.x + v0.y * va.y, 0, "and is perpendicular")
+
+	# And in play: a jelly bomb rolling across open floor never doubles back
+	# without bouncing off something first.
+	for round_seed in [1, 2, 3, 4, 5, 6, 7, 8]:
+		var sim := _sim(1, round_seed)
+		var p: Player_ = sim.players[0]
+		p.place_at_tile_centre(1, 5)
+		sim.give_powerup(p, Types_.PowerUp.KICK)
+		sim.give_powerup(p, Types_.PowerUp.JELLY)
+		var bomb := sim.place_bomb(p)
+		bomb.place_at_tile_centre(2, 5)
+		bomb.fuze = 100000
+		p.move = Types_.MoveState.RIGHT
+		var prev := Types_.Dir.NONE
+		for _i in 20:
+			sim.tick()
+			if bomb.move_dir == Types_.Dir.NONE:
+				break
+			if prev != Types_.Dir.NONE and bomb.move_dir != prev \
+					and bomb.state != Types_.BombState.WOBBLE:
+				var pv: Vector2i = Types_.DIR_VEC[prev]
+				var nv: Vector2i = Types_.DIR_VEC[bomb.move_dir]
+				t.eq(pv.x * nv.x + pv.y * nv.y, 0,
+					"seed %d: every mid-roll turn is a quarter turn" % round_seed)
+			prev = bomb.move_dir
