@@ -1807,16 +1807,25 @@ func _fly_bomb(b: Bomb_) -> void:
 	_play(b.owner, Types_.SoundEffect.BOMB_THROWN)
 	_bomb_on_the_head(b)
 
-	if b.bounces_left > 0:
-		# A punched bomb bounces on, one cell at a time, until it runs out of
-		# bounces or something stops it. Resource 661 is the smaller arc.
-		b.bounces_left -= 1
+	# IT BOUNCES ON, one cell at a time, until something stops it or its fuze
+	# runs out. VALUELST 660 and 661 are "initial three-space punch bounces"
+	# and "subsequent small 1-space punch bounces" — the first hop covers the
+	# three cells at the tall arc, every hop after that covers one at the
+	# small one. SOUNDLST 160 is "a punched/GRABBED bomb bouncing along", so a
+	# thrown bomb does this too; it used to be given no bounces at all and
+	# simply stopped dead where it landed.
+	#
+	# No bounce count any more: the fuze is what ends it, now that a bounce no
+	# longer resets it. The landing cell is wrapped for the same reason the
+	# flight is — a bomb bouncing along is still travelling over the arena
+	# wall, not into it.
+	if b.move_dir != Types_.Dir.NONE:
 		var step: Vector2i = Types_.DIR_VEC[b.move_dir]
-		var tx := b.tile_x() + step.x
-		var ty := b.tile_y() + step.y
-		if not _bomb_blocked(b, tx, ty):
+		var tx := _wrap_tx(b.tile_x() + step.x)
+		var ty := _wrap_ty(b.tile_y() + step.y)
+		if Field_.in_bounds(tx, ty) and not _bomb_blocked(b, tx, ty, true):
 			_launch(b, tx, ty, Values_.V[Const_.Res.PUNCH_ARC_SMALL],
-				Values_.V[Const_.Res.PUNCHED_BOMB_SPEED])
+				Values_.V[Const_.Res.PUNCHED_BOMB_SPEED], false)
 			return
 	b.move_dir = Types_.Dir.NONE
 	b.speed = 0
@@ -1975,7 +1984,8 @@ func _wrap_bomb_pos(b: Bomb_) -> void:
 ## Send a bomb flying to a cell. The flight time comes from the distance and
 ## the speed, so a bomb crosses ground at the tabulated rate rather than at a
 ## made-up number of ticks.
-func _launch(b: Bomb_, tx: int, ty: int, height: int, speed: int) -> void:
+func _launch(b: Bomb_, tx: int, ty: int, height: int, speed: int,
+		reset_fuze: bool = true) -> void:
 	b.fly_from_x = b.x
 	b.fly_from_y = b.y
 	b.fly_to_x = tx * Bomb_.TILE_W_CP + Bomb_.TILE_W_CP / 2
@@ -1987,8 +1997,14 @@ func _launch(b: Bomb_, tx: int, ty: int, height: int, speed: int) -> void:
 	b.flying = true
 	b.speed = speed
 	# A punched bomb's timer is reset — the notes: "bomb timer is reset when
-	# its punched".
-	b.fuze = _fuze_ticks
+	# its punched". Only on the punch or the throw itself, NOT on each of the
+	# bounces that follow: resetting it every hop meant the fuze could never
+	# run down while a bomb was bouncing, which is why the bouncing had to be
+	# stopped by an invented three-bounce cap instead of by the bomb going
+	# off. VALUELST 661 calls them "subsequent small 1-space punch bounces"
+	# and names no count.
+	if reset_fuze:
+		b.fuze = _fuze_ticks
 
 
 ## The other way round. Also what a chained bomb is told not to fire down: the
@@ -2088,7 +2104,9 @@ func punch_bomb(p: Player_) -> bool:
 	var ty := landing.y
 	b.move_dir = p.facing
 	b.jelly_bounce = p.jelly_bombs
-	b.bounces_left = 3
+	# No longer a limit — the fuze ends the bouncing (see _fly_bomb). Kept at
+	# zero so the field, which still travels in a snapshot, means nothing.
+	b.bounces_left = 0
 	_launch(b, tx, ty, Values_.V[Const_.Res.PUNCH_ARC_BIG],
 		Values_.V[Const_.Res.PUNCHED_BOMB_SPEED])
 	p.punch_ticks = PUNCH_ANIM_TICKS

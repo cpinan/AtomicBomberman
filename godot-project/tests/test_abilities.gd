@@ -49,6 +49,7 @@ func _init() -> void:
 	_test_jelly_turns_are_quarter_turns(t)
 	_test_thrown_bombs_never_stack(t)
 	_test_a_throw_at_the_edge_wraps(t)
+	_test_a_grabbed_bomb_bounces_along(t)
 	quit(t.finish())
 
 
@@ -1365,16 +1366,22 @@ func _test_a_throw_at_the_edge_wraps(t: T_) -> void:
 	sim.tick()
 	t.ok(b.flying, "releasing throws it rather than dropping it")
 
+	# It bounces on until it settles or its fuze ends it, so follow it and
+	# keep the last live position rather than waiting for a landing that an
+	# open row never produces.
+	var last := Vector2i(b.tile_x(), b.tile_y())
 	for _i in 120:
 		sim.tick()
-		if not b.flying:
+		if b.detonated:
 			break
-	t.ok(not b.flying, "it lands")
-	t.ok(b.tile_x() != edge or b.tile_y() != 5,
-		"and not back at the thrower's feet")
-	t.ok(Field_.in_bounds(b.tile_x(), b.tile_y()),
-		"it comes to rest inside the arena (%d,%d)" % [b.tile_x(), b.tile_y()])
-	t.ok(b.tile_x() < edge,
+		last = Vector2i(b.tile_x(), b.tile_y())
+		if not b.flying and b.move_dir == Types_.Dir.NONE:
+			break
+	t.ok(last.x != edge or last.y != 5,
+		"it does not stay at the thrower's feet")
+	t.ok(Field_.in_bounds(last.x, last.y),
+		"and stays inside the arena (%d,%d)" % [last.x, last.y])
+	t.ok(last.x < edge,
 		"having wrapped round to the far side rather than stopping at the wall")
 
 	# The wrap helpers themselves, against the original's own thresholds.
@@ -1385,3 +1392,67 @@ func _test_a_throw_at_the_edge_wraps(t: T_) -> void:
 	t.eq(Sim_._wrap_ty(-2), -2 + Const_.FIELD_H + Sim_.WRAP_MARGIN,
 		"y wraps two cells before the edge")
 	t.eq(Sim_._wrap_ty(-1), -1, "but not one cell before it")
+
+
+## A THROWN BOMB BOUNCES ALONG, like a punched one.
+##
+## SOUNDLST.RES names the sound "a punched/GRABBED bomb bouncing along", and
+## VALUELST 660/661 are "initial three-space punch bounces" and "subsequent
+## small 1-space punch bounces" — one tall hop over three cells, then one-cell
+## hops at the smaller arc. This port gave a thrown bomb no bounces at all
+## (`bounces_left = 0`), so it stopped dead where it first landed, and capped a
+## punched one at three — a number from nowhere, needed only because every hop
+## re-launched the bomb and re-armed its fuze, so nothing else could ever end
+## the bouncing.
+func _test_a_grabbed_bomb_bounces_along(t: T_) -> void:
+	var sim := _sim(1)
+	var p: Player_ = sim.players[0]
+	p.place_at_tile_centre(2, 5)
+	p.facing = Types_.Dir.RIGHT
+	sim.give_powerup(p, Types_.PowerUp.GRAB)
+	var b := sim.place_bomb(p)
+	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.FIRST, true)
+	sim.tick()
+	t.eq(b.carried_by, p.slot, "picked up")
+	sim.set_input(p.slot, Types_.MoveState.STILL, Types_.Action.NONE, false)
+	sim.tick()
+	t.ok(b.flying, "and thrown")
+
+	# The first hop covers three cells, landing on tile 5. If it bounces on it
+	# must end up PAST that; if it stops dead it ends on it. Measured by where
+	# it gets to rather than by watching `flying`, which never reads false
+	# from outside: the bomb re-launches in the same tick it touches down.
+	var furthest := b.tile_x()
+	for _i in 100:
+		sim.tick()
+		if b.detonated:
+			break
+		furthest = maxi(furthest, b.tile_x())
+		if not b.flying and b.move_dir == Types_.Dir.NONE:
+			break
+	t.ok(furthest > 5,
+		"a thrown bomb bounces on past its first landing (reached %d, first "
+			% furthest + "landing is tile 5)")
+
+	# THE FUZE is what ends it now, not a bounce counter — a hop must not
+	# re-arm the timer the way the initial throw does.
+	var s2 := _sim(1)
+	var p2: Player_ = s2.players[0]
+	p2.place_at_tile_centre(2, 5)
+	p2.facing = Types_.Dir.RIGHT
+	s2.give_powerup(p2, Types_.PowerUp.PUNCH)
+	var b2 := s2.place_bomb(p2)
+	b2.place_at_tile_centre(3, 5)
+	t.ok(s2.punch_bomb(p2), "punched")
+	var fuze_at_launch := b2.fuze
+	for _i in 12:
+		s2.tick()
+	t.ok(b2.fuze < fuze_at_launch,
+		"the fuze keeps running down while it bounces (%d -> %d)"
+			% [fuze_at_launch, b2.fuze])
+	# And it does go off rather than bouncing for ever.
+	for _i in 200:
+		s2.tick()
+		if b2.detonated:
+			break
+	t.ok(b2.detonated, "a bouncing bomb still detonates on its own fuze")

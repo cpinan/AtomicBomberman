@@ -29,18 +29,20 @@ on/off twice a second). None has been seen by a human yet.
 
 ## In flight
 
-- `godot-project/scripts/sim/sim.gd` `_landing_cell()` — **the one structural
-  mismatch left.** BM95.EXE moves a punched bomb in one-cell HOPS with a hop
-  counter at struct offset `+0x48`; the arc is resource 660 while that counter
-  is under 3 and 661 from 3 onward, which is what "initial three-space bounce
-  height" versus "subsequent one-space bounces" actually means, and the same
-  counter gates the jelly turn so a punch's first three cells are straight
-  (`0x4243F5`, `0x423991`). This port precomputes a landing cell and
-  interpolates one flight to it. Every throw/punch bug reported this session —
-  bombs stacking, the arena edge, the "nowhere to go" refusal the original
-  never needs — came from that mismatch and was patched at the landing-search
-  level instead. Three patches where the original has one model. Full write-up
-  with addresses in `docs/POWERUP_REVIEW_PLAN.md`.
+- `godot-project/scripts/sim/sim.gd` `_fly_bomb()` — the hop model is now
+  mostly matched: one tall hop over three cells (VALUELST 660, "initial
+  three-space punch bounces") then one-cell hops at the small arc (661,
+  "subsequent small 1-space punch bounces"), for thrown bombs as well as
+  punched ones, ending when the fuze does. **What is still missing** is the
+  per-bomb hop counter BM95.EXE keeps at struct offset `+0x48`: it gates the
+  jelly crazy turn at `0x423991`, so in the original a punched JELLY bomb's
+  first three cells are straight and only the one-cell bouncing afterwards can
+  wander. This port lets a jelly bomb turn from the first intersection.
+- `godot-project/scripts/sim/sim.gd` `_landing_cell()` — still precomputes a
+  landing rather than resolving each hop as it arrives, which is why the
+  overlap, arena-edge and "nowhere to go" cases each needed their own patch
+  where the original needs none. Working, but three patches for one model.
+  Addresses in `docs/POWERUP_REVIEW_PLAN.md`.
 - `godot-project/scripts/sim/sim.gd` `_explain_action()` — temporary
   scaffolding behind `AB_DEBUG_ACTIONS=1`. Delete it once the on-screen action
   history (step 3 of `docs/POWERUP_TEST_RANGE_PLAN.md`) exists.
@@ -63,6 +65,12 @@ exactly like a real regression and is not one.
 
 ## Open questions
 
+- `win/Bomberman/` is a SECOND INSTALL of the same game, not source. Its
+  `bombeman.EXE` has the same MD5 as `original-game/BM95.EXE`
+  (`380baabe114af0596d860477d976a4c7`), and VALUELST.RES and the manual are
+  byte-identical; its SOUNDLST.RES is a cut-down copy missing the announcer
+  samples, so `original-game/` stays the reference tree. Nothing further to
+  mine there.
 - Observed 2026-09-21, not chased: a player stood on tiles `(0,7)` and `(7,0)`,
   the arena's outer ring. Either legitimate scheme data for that level or a
   border that is not solid. Unrelated to powerups, so left alone.
