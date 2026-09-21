@@ -1,54 +1,90 @@
 # STATUS — Atomic Bomberman Godot port
 
-_Last updated: 2026-09-18 · branch `main` · 0 uncommitted files_
+_Last updated: 2026-09-21 · branch `main` · 1 uncommitted file_
 
 ## Next action
 
-**Draw a replacement art set** (`docs/ART.md`, `tools/artpack.py`) — the
-only remaining path to a build that could ever be redistributed; the port
-currently plays on the original's own extracted assets, which cannot ship.
+**Live-playtest GRAB (blue glove)**: hold Space to carry a bomb, release to
+throw it. This exact powerup has been "fixed" twice already this session
+(commits `5070741`, `75c4734`) and the second fix has never been confirmed
+live — see `docs/POWERUP_REVIEW_PLAN.md` §7 for exact repro steps before
+reporting it broken again.
 
 ## State
 
-- The game starts, plays and finishes on the original's own screens, art,
-  sounds and level data — all 67 shipped schemes, all 13 powerups, all 12
-  diseases, campaign mode, full networked play (WebSocket, server-
-  authoritative, FNV-1a state hash every tick).
-- `tools/verify.sh` is green: 37 suites, ~6,100+ checks, a parse pass over
-  every `.gd` file, a real server-plus-two-clients WebSocket match, the
-  scheme two-parser cross-check (67/67 agree), mutation testing (211/213
-  caught, 2 equivalent).
-- Repo is on GitHub, private: `github.com/cpinan/AtomicBomberman`.
-- AI is built from `BM95.EXE`'s own disassembled decision table, then
-  deliberately tuned more aggressive than a strict fidelity read (see
-  `docs/BUGS.md`'s "GAMEPLAY AGGRESSION" note in `ai.gd`) — a documented
-  gameplay choice, not a fidelity gap.
-- The one known, inherent (not fixable by more code) rendering issue: a
-  0.5px flame-alignment quantization from an odd-width sprite in an
-  even-width cell — `docs/BUGS.md` Q10.
+- Same baseline as before: game starts/plays/finishes on the original's own
+  screens, art, sounds and level data — 67 schemes, 13 powerups, 12
+  diseases, campaign mode, server-authoritative WebSocket netplay.
+- This session's bug-hunt round (playtesting + fixes, commits `210aa39`,
+  `5070741`, `75c4734`): level preview now draws real layout not just
+  background; cornerhead no longer replays every variant while trapped;
+  jelly bomb bounce snaps to cell centre (no more sitting-in-the-wall
+  glitch) and keeps its wobble sprite mid-flight; powerup exclusivity
+  matrix fixed to match MANUAL.BM's own table (Trigger↔Jelly, Trigger↔Punch,
+  Grab↔Spooge — was backwards); Super Bad Disease now gives up to 3
+  diseases, not 1; punch no longer plays its animation over a zero-distance
+  blocked throw; options now survive returning to the menu after a match
+  (root cause: `_teardown()` nulled `menu` before a match even began); grab
+  is hold-to-carry/release-to-throw (see Next action — unverified).
+- Invented (no original asset existed): a sickly-green tint pulse on a
+  diseased player, since nothing marked disease state visually before.
+- New feature this session: internet multiplayer via a room-code
+  directory, not a traffic relay — `directory/` (Node, zero deps, own test
+  suite) maps a short code to a dedicated server's `ws://` URL; hosting
+  from the menu now opens a lobby (roster, host presses Start) instead of
+  starting instantly; `scripts/net/directory.gd` is the Godot-side client.
+  All 4 build-order steps done and committed (`75fe013`, `fa47130`,
+  `bb82918`, `4eac232`) — plan doc at
+  `~/.claude/plans/stateless-mapping-mist.md`. **Nothing has left
+  localhost/LAN yet** — see Open questions.
+- `tools/verify.sh` green throughout this session's changes (last full run:
+  all suites passing, counts grew — e.g. `powerups` 168→236 checks,
+  `abilities` 179→181, new `directory` and `net` coverage added).
 
 ## In flight
 
-Nothing in flight — working tree is clean, everything committed and pushed.
+- `docs/POWERUP_REVIEW_PLAN.md` (uncommitted, user chose to keep local) —
+  per-powerup bug/status handoff doc, written for delegating a live
+  playtest pass to another agent. GRAB and SPOOGE flagged top priority
+  (GRAB just changed mechanics again; SPOOGE has never been live-tested at
+  all this session, sim-layer only).
 
 ## Verify
 
 ```bash
-tools/verify.sh                  # 37 suites, all checks, 74 .gd files parsed
-EXPORT=1 tools/verify.sh         # plus both export presets, .pck probed
-tools/schemes.py --compare       # the two-parser check, now wired into verify.sh
-tools/extract.py --check         # re-parse the whole disc, write nothing
-cd godot-project && ../tools/mutate.py   # mutation run
+tools/verify.sh                  # full suite, run from repo root
 ```
 
 `AB_DATA` overrides where the disc is found (default `../original-game`
-from `godot-project/`). Without game data the data-driven suites skip and
-the app falls back to a built-in grid. **Never run two Godot processes
-against this project at once** — they share a LAN discovery port
-(`test_discovery.gd`) and corrupt each other's results.
+from `godot-project/`). **Never run two Godot processes against this
+project at once** — they share a LAN discovery port and corrupt each
+other's results; `pkill -f Godot.app` before relaunching to test a fix,
+every time — stale-process confusion caused several false "still broken"
+reports this session.
 
 ## Open questions
 
+- **GRAB's hold-to-carry/release-to-throw mechanic** (commit `75c4734`) —
+  live-unconfirmed, see Next action.
+- **SPOOGE** — never live-playtested this session at all, sim-layer only.
+- **Internet multiplayer is untested beyond localhost/LAN.** To actually
+  prove it: deploy `directory/` and `server/` (see each README) to a real
+  VPS, launch the dedicated server with `--directory <url> --public-host
+  <ip-or-domain>`, and join from a genuinely different network. Everything
+  built so far only proves the mechanism works, not that it reaches the
+  open internet.
+- **Menu-hosted (not dedicated-server) internet play has a known gap**: a
+  room code only works if that host's own machine is reachable from the
+  internet (port-forwarded) — the lookup-only directory design (chosen over
+  a full relay) can't solve NAT for a home host. Worth deciding whether
+  that's acceptable or whether the relay alternative from the plan's first
+  draft should be revisited.
+- **AI kicks a bomb before fleeing danger it's standing in** (`ai.gd`,
+  entry 1 before entry 2) — matches the original's own disassembled
+  decision order, so may be intentional fidelity rather than a bug.
+  Flagged for a decision, not fixed either way.
+- Pixels/pad/`.AAF`/`APPLBITE` family — unchanged from before this session,
+  see prior open questions below (carried forward, still true).
 - **Pixels.** The art pipeline is proven; nobody has drawn a replacement
   set. Until then no build is distributable. `docs/ART.md`.
 - **A pad.** The gamepad layer is tested against synthesised events only;
@@ -56,12 +92,11 @@ against this project at once** — they share a LAN discovery port
 - **`.AAF` is not cracked** — five antialiased fonts from `INSTALL.DAT`.
   Zero port value (they're the *setup program's* fonts). `docs/ORACLE.md` §9.
 - **`APPLBITE`/`NUCKBLOW`/`ZEN`** — a still-unexplained 73×73 animation
-  family, distinct from cornerhead (which IS explained and implemented as
-  of 2026-09-18). Name appears nowhere on the disc's own text.
-- **Death animation/cornerhead netcode sync** — neither `death_anim` nor
-  the newer `cornerhead`/`cornerhead_ticks` are in
+  family, distinct from cornerhead. Name appears nowhere on the disc's own
+  text.
+- **Death animation/cornerhead netcode sync** — neither is in
   `Player_.to_bytes()`/`state_hash()`, so a joining client doesn't see
-  either animation correctly. Cosmetic only; doesn't affect sim correctness.
+  either animation correctly. Cosmetic only.
 
 ## Do not redo
 
@@ -71,26 +106,34 @@ against this project at once** — they share a LAN discovery port
   shortcut on most keyboards; the OS eats it before Godot sees it.
 - **The status panel is 42 px** (`Const_.HUD_H`); `FIELD_Y_OFF` is 68.
 - **Flame frames are centred on the cell**, never anchored on their hotspot
-  — and centring an odd-width sprite in the 40px-wide cell has an
-  irreducible 0.5px error; don't re-litigate this as a rounding bug (Q10).
+  — centring an odd-width sprite in the 40px-wide cell has an irreducible
+  0.5px error; don't re-litigate this as a rounding bug (`docs/BUGS.md` Q10).
 - **A game left open in another window breaks netplay-adjacent test
-  suites** (`test_discovery.gd`, occasionally `test_net.gd`'s version
-  assertions if you also bumped `Protocol_.VERSION` and forgot to update a
-  hardcoded expectation somewhere). Kill stray headless Godot processes
-  before blaming the code: `pgrep -fl Godot`.
-- **The movement algorithm is read but deliberately not adopted** (Q5.1) —
-  every other system and the network hash sit on the movement this port
-  has.
+  suites AND causes false "still broken" playtest reports** — this session
+  hit the latter repeatedly: a fix was correct but the tester was still on
+  a stale process. Kill stray headless/GUI Godot processes before either
+  running tests or handing the app back for a retest:
+  `pkill -f Godot.app`.
+- **The movement algorithm is read but deliberately not adopted** (Q5.1).
 - **The AI's search is a graded danger map + BFS, not the original's
-  cloning-walker frontier over a 100-node pool** — a deliberate,
-  documented simplification (Q5.4), not a bug to "fix" toward fidelity.
+  cloning-walker frontier** — a deliberate, documented simplification
+  (Q5.4), not a bug to "fix" toward fidelity. Its decision ORDER (kick
+  before flee) is a separate, still-open question — see Open questions.
 - **The netplay server-override key is scoped to mid-round demote/restore
-  only** — it does NOT implement the original's full pre-round KEY/AI/OFF/
-  JOY lobby cycle, because this port has no pre-round lobby screen. Don't
-  assume the key does more than toggle AI on/off for a seat.
+  only**, distinct from the NEW pre-round lobby built this session — don't
+  conflate the two; the lobby (roster + host Start) is a different feature
+  added on top, not a replacement for the override key.
 - **`bmexe.py`'s `--xref` only follows DIRECT call targets** — an
   indirectly-dispatched function's own resource reads get attributed to
-  whichever function calls it. Hit three times now (AI dispatch, twice;
-  cornerhead's trigger). If a resource's "owning function" via `--xref`
-  doesn't contain the code you expect, read that function's own
-  instructions directly rather than trusting the summary.
+  whichever function calls it. If a resource's "owning function" via
+  `--xref` doesn't contain the code you expect, read that function's own
+  instructions directly.
+- **The directory service (`directory/`) is a lookup table, not a
+  relay** — no game traffic passes through it, on purpose (chosen over a
+  full relay to keep the build small; see
+  `~/.claude/plans/stateless-mapping-mist.md` for why). Don't "fix" it by
+  routing gameplay bytes through it — that's a different, bigger feature.
+- **GRAB's mechanic has flip-flopped twice** (tap-then-tap → hold-to-carry/
+  release-to-throw) — before changing it again, get an explicit, exact
+  description of the wanted behavior from the user first; guessing burned
+  two iterations already.
