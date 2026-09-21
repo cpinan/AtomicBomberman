@@ -1,0 +1,23 @@
+# One command to run the room directory: docker compose up
+#
+# Separate from server/docker-compose.yml on purpose — a directory instance
+# is shared across every host's game, not tied to any one match, so it has
+# its own lifecycle. Run it on the same VPS as a server/ instance (on a
+# different port, as here) or on its own host entirely; either way, give
+# every server/ deployment's AB_DIRECTORY_URL this instance's public address.
+services:
+  directory:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: atomic-bomberman-directory
+    restart: unless-stopped
+    environment:
+      PORT: 8420
+    ports:
+      - "8420:8420"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M

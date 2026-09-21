@@ -1,0 +1,11 @@
+{
+  "name": "ab-room-directory",
+  "version": "1.0.0",
+  "description": "Room-code lookup directory for Atomic Bomberman dedicated servers. Maps a short code to a ws:// URL; no game traffic passes through it.",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  }
+}
