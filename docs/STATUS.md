@@ -4,8 +4,8 @@ _Last updated: 2026-09-21 · branch `main` · 0 uncommitted files_
 
 ## Next action
 
-Start `docs/NETWORK_PLAN.md` — item 3 (audit the network logic) for anything
-that blocks play, then items 1 and 2 (the host and join screens) together.
+Fix `docs/IMPROVEMENTS.md` A1 — the match never ends, which blocks everything
+else — then the rest of Part A, then `docs/NETWORK_PLAN.md` items 1 and 2.
 Before that, live-playtest everything from `7e574d2` onward — throw a bomb off an arena
 edge (it should reappear on the far side, not drop at your feet), throw two
 at the same cell (they must not stack), throw one along an open row (it
@@ -43,6 +43,10 @@ human yet.
   no longer clears a pending action, only the tick does. This affected bombs,
   punch, trigger, kick-stop and grab/throw equally; all of them will have felt
   unreliable online and none has been re-tested live since the fix.
+- `docs/IMPROVEMENTS.md` lists the confirmed defects still open — the match
+  never ending (evidence captured), a dead server quitting the whole app,
+  pause in network games, the level-select screen, the flame offset — plus
+  recommendations for the game/UX and for the code.
 - `docs/MULTIPLAYER.md` is the user-facing guide to playing together, and
   `docs/NETWORK_PLAN.md` is the plan for making network play usable from the
   menu (host/join screens, a network audit, docs, and a gameplay comparison
