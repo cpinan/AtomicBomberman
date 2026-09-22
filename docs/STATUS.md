@@ -4,7 +4,9 @@ _Last updated: 2026-09-21 · branch `main` · 0 uncommitted files_
 
 ## Next action
 
-Live-playtest everything from `7e574d2` onward — throw a bomb off an arena
+Start `docs/NETWORK_PLAN.md` — item 3 (audit the network logic) for anything
+that blocks play, then items 1 and 2 (the host and join screens) together.
+Before that, live-playtest everything from `7e574d2` onward — throw a bomb off an arena
 edge (it should reappear on the far side, not drop at your feet), throw two
 at the same cell (they must not stack), throw one along an open row (it
 should bounce on a cell at a time and only tick once it settles), kick a
@@ -41,7 +43,15 @@ human yet.
   no longer clears a pending action, only the tick does. This affected bombs,
   punch, trigger, kick-stop and grab/throw equally; all of them will have felt
   unreliable online and none has been re-tested live since the fix.
-- `docs/MULTIPLAYER.md` is the user-facing guide to playing together.
+- `docs/MULTIPLAYER.md` is the user-facing guide to playing together, and
+  `docs/NETWORK_PLAN.md` is the plan for making network play usable from the
+  menu (host/join screens, a network audit, docs, and a gameplay comparison
+  against the original).
+- Three netplay faults fixed and pushed in `60d6b0a`: the lobby reaped
+  waiting players after 30 s (which is what "Enter is not working" was),
+  animation timers never crossed the wire so networked players never animated
+  dying/kicking/punching, and a send to an already-closing socket logged an
+  engine error that verify.sh reads as a dead suite.
 - Deliberately NOT built: the per-hop bomb flight model (see "In flight").
 
 ## In flight
