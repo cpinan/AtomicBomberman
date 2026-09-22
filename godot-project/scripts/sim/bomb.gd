@@ -34,7 +34,12 @@ var fly_ticks: int = 0
 ## initial three-cell punch and 661 is 20 for the one-cell bounces after it.
 var fly_height: int = 0
 ## How many one-cell bounces are still to come after this flight.
-var bounces_left: int = 0
+## Cells crossed since this bomb was last set moving — BM95.EXE keeps the same
+## counter at struct offset +0x48, zeroes it in punch_bomb() (0x424951) and
+## increments it per tile crossed (0x42398A). A jelly bomb's crazy turn is
+## refused until it reaches 3 (0x423991), which is what keeps the initial
+## three-space punch straight.
+var cells_travelled: int = 0
 
 ## Slot carrying this bomb, or -1. A carried bomb's fuze does NOT burn:
 ## AtomBomberman's notes say "when its picked up its not even ticking (starts
@@ -141,7 +146,7 @@ func to_bytes() -> PackedByteArray:
 	b.append(int(jelly_bounce))
 	b.append(clampi(carried_by + 1, 0, 255))
 	b.append(int(hold_required_to_carry))
-	b.append(bounces_left)
+	b.append(cells_travelled)
 	b.append(owner)
 	b.append(chain_owner)
 	b.append(state)

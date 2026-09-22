@@ -1644,8 +1644,13 @@ func _roll_bomb(b: Bomb_) -> void:
 			_play(b.owner, Types_.SoundEffect.BOMB_STOP)
 		return
 
+	var tile_was := Vector2i(b.tile_x(), b.tile_y())
 	b.x = next_x
 	b.y = next_y
+	# One per tile crossed — BM95.EXE 0x42398A increments the same counter
+	# when the bomb's tile changes. JELLY_TURN_AFTER_CELLS reads it.
+	if b.tile_x() != tile_was.x or b.tile_y() != tile_was.y:
+		b.cells_travelled += 1
 
 	# An ARROW redirects a bomb that rolls onto it. A bomb PLACED on one is not
 	# moved — AtomBomberman's notes: "when bomb is put on an arrow, or its
@@ -1665,7 +1670,14 @@ func _roll_bomb(b: Bomb_) -> void:
 	# A jelly bomb crossing a cell centre may turn. "at each 0,0 intersection,
 	# what is the chances that a punched jelly bomb will change directions
 	# crazily" — resource 667.
-	if b.jelly_bounce and _at_cell_centre(b):
+	# NOT UNTIL IT HAS TRAVELLED THREE CELLS — BM95.EXE 0x423991 refuses the
+	# turn while the bomb's own cell counter (+0x48) is under 3. That is what
+	# keeps the "initial three-space punch" of VALUELST 660 straight: only the
+	# one-cell bouncing afterwards wanders. The counter is not reset by a
+	# kick, so a bomb kicked from rest runs its first three cells straight
+	# too.
+	if b.jelly_bounce and _at_cell_centre(b) \
+			and b.cells_travelled >= JELLY_TURN_AFTER_CELLS:
 		if rng.randi_range(1, Values_.V[Const_.Res.JELLY_TURN_CHANCE]) == 1:
 			# A QUARTER TURN, LEFT OR RIGHT — BM95.EXE 0x423A1E:
 			#
@@ -1800,6 +1812,16 @@ func _fly_bomb(b: Bomb_) -> void:
 	# Landed. SOUNDLST 160 is "a punched/grabbed bomb bouncing along", which is
 	# this moment and not the throw: the throw is BOMB_PUNCH or BOMB_GRAB.
 	b.flying = false
+	# The hop's own length in cells, taken from where the hop STARTED rather
+	# than from b.x — by now the interpolation has already carried that to the
+	# destination, so reading it here measured zero every time. Same counter
+	# the rolling path uses: the initial three-space punch adds 3 at once, so
+	# a jelly bomb is free to turn from its first one-cell bounce and not
+	# before.
+	var hop_cells: int = absi(b.fly_to_x / Bomb_.TILE_W_CP
+			- b.fly_from_x / Bomb_.TILE_W_CP) \
+		+ absi(b.fly_to_y / Bomb_.TILE_H_CP - b.fly_from_y / Bomb_.TILE_H_CP)
+	b.cells_travelled += hop_cells
 	b.x = b.fly_to_x
 	b.y = b.fly_to_y
 	_wrap_bomb_pos(b)
@@ -1946,6 +1968,10 @@ func _landing_cell(b: Bomb_, from_tx: int, from_ty: int, dir: int,
 ## before reappearing rather than snapping across the instant it passes the
 ## wall.
 const WRAP_MARGIN := 3
+
+## BM95.EXE 0x423991: `cmp word [bomb+0x48], 3 / jl skip` — a jelly bomb may
+## not take its crazy turn until it has crossed three cells.
+const JELLY_TURN_AFTER_CELLS := 3
 
 static func _wrap_tx(tx: int) -> int:
 	var span: int = Const_.FIELD_W + WRAP_MARGIN
@@ -2104,9 +2130,9 @@ func punch_bomb(p: Player_) -> bool:
 	var ty := landing.y
 	b.move_dir = p.facing
 	b.jelly_bounce = p.jelly_bombs
-	# No longer a limit — the fuze ends the bouncing (see _fly_bomb). Kept at
-	# zero so the field, which still travels in a snapshot, means nothing.
-	b.bounces_left = 0
+	# BM95.EXE 0x424951 zeroes the same counter on a punch, which is what makes
+	# the initial three-space hop straight for a jelly bomb.
+	b.cells_travelled = 0
 	_launch(b, tx, ty, Values_.V[Const_.Res.PUNCH_ARC_BIG],
 		Values_.V[Const_.Res.PUNCHED_BOMB_SPEED])
 	p.punch_ticks = PUNCH_ANIM_TICKS
@@ -2192,7 +2218,7 @@ func _throw_carried(p: Player_, b: Bomb_) -> void:
 	b.hold_required_to_carry = false
 	b.move_dir = p.facing
 	b.jelly_bounce = p.jelly_bombs
-	b.bounces_left = 0
+	b.cells_travelled = 0
 	# The GRAB left p.pickup_pause counting down so BPICKUP.ANI could play
 	# out. A throw ends that pose — it is the deliberate next action, not
 	# an interruption of the pickup — and without this the view's own

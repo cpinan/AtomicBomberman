@@ -312,7 +312,7 @@ func _test_snapshot_carries_everything(t: T_) -> void:
 		"bomb trigger flag": func(b: Bomb_): b.triggered = true,
 		"bomb jelly flag": func(b: Bomb_): b.jelly_bounce = true,
 		"bomb carrier": func(b: Bomb_): b.carried_by = 1,
-		"bomb bounces": func(b: Bomb_): b.bounces_left = 2,
+		"bomb bounces": func(b: Bomb_): b.cells_travelled = 2,
 		"bomb owner": func(b: Bomb_): b.owner = 3,
 		"bomb chain owner": func(b: Bomb_): b.chain_owner = 3,
 		"bomb state": func(b: Bomb_): b.state = Types_.BombState.DUD,

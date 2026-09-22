@@ -202,7 +202,7 @@ static func _read_bomb(b: Bomb_, d: PackedByteArray, at: int) -> void:
 	b.jelly_bounce = d[pos] != 0; pos += 1
 	b.carried_by = int(d[pos]) - 1; pos += 1
 	b.hold_required_to_carry = d[pos] != 0; pos += 1
-	b.bounces_left = d[pos]; pos += 1
+	b.cells_travelled = d[pos]; pos += 1
 	b.owner = d[pos]; pos += 1
 	b.chain_owner = d[pos]; pos += 1
 	b.state = d[pos]; pos += 1

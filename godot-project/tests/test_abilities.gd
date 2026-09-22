@@ -50,6 +50,7 @@ func _init() -> void:
 	_test_thrown_bombs_never_stack(t)
 	_test_a_throw_at_the_edge_wraps(t)
 	_test_a_grabbed_bomb_bounces_along(t)
+	_test_jelly_runs_three_cells_straight(t)
 	quit(t.finish())
 
 
@@ -158,8 +159,12 @@ func _test_jelly(t: T_) -> void:
 	# takes random quarter turns on the way (BM95.EXE 0x423A1E), so which wall
 	# it reaches first is not fixed. That it bounces off whatever it reaches,
 	# instead of coming to rest the way an ordinary bomb does, is the claim.
+	# A long fuze: a jelly bomb wanders once it has its three cells up
+	# (BM95.EXE 0x423991), so it can take a while to find a wall, and this is
+	# a test about bouncing rather than about detonating on time.
+	b.fuze = 100000
 	var bounced := false
-	for _i in 200:
+	for _i in 400:
 		sim.tick()
 		if b.state == Types_.BombState.WOBBLE:
 			bounced = true
@@ -216,7 +221,7 @@ func _test_punch(t: T_) -> void:
 
 	for _i in 60:
 		s2.tick()
-		if not b2.flying and b2.bounces_left == 0:
+		if not b2.flying and b2.cells_travelled == 0:
 			break
 	t.ok(not b2.flying, "it lands")
 	t.ok(b2.tile_x() > 3, "further along than it started")
@@ -271,7 +276,7 @@ func _test_punch(t: T_) -> void:
 	t.ok(b5.tile_x() < 5, "lands short of the occupied cell, not on it")
 	for _i in 60:
 		s5.tick()
-		if not b5.flying and b5.bounces_left == 0:
+		if not b5.flying and b5.cells_travelled == 0:
 			break
 	t.ok(b5.tile_x() != blocker.tile_x() or b5.tile_y() != blocker.tile_y(),
 		"[invariant] two bombs never end up on the same cell")
@@ -1400,7 +1405,7 @@ func _test_a_throw_at_the_edge_wraps(t: T_) -> void:
 ## VALUELST 660/661 are "initial three-space punch bounces" and "subsequent
 ## small 1-space punch bounces" — one tall hop over three cells, then one-cell
 ## hops at the smaller arc. This port gave a thrown bomb no bounces at all
-## (`bounces_left = 0`), so it stopped dead where it first landed, and capped a
+## (`cells_travelled = 0`), so it stopped dead where it first landed, and capped a
 ## punched one at three — a number from nowhere, needed only because every hop
 ## re-launched the bomb and re-armed its fuze, so nothing else could ever end
 ## the bouncing.
@@ -1456,3 +1461,62 @@ func _test_a_grabbed_bomb_bounces_along(t: T_) -> void:
 		if b2.detonated:
 			break
 	t.ok(b2.detonated, "a bouncing bomb still detonates on its own fuze")
+
+
+## A JELLY BOMB RUNS ITS FIRST THREE CELLS STRAIGHT — BM95.EXE 0x423991:
+## `cmp word [bomb+0x48], 3 / jl skip`, where +0x48 is a per-bomb count of
+## cells crossed, zeroed on a punch (0x424951) and incremented per tile
+## (0x42398A). That is what keeps VALUELST 660's "initial three-space punch"
+## straight: only the one-cell bouncing afterwards wanders. This port let a
+## jelly bomb turn from the very first intersection.
+func _test_jelly_runs_three_cells_straight(t: T_) -> void:
+	# Across many seeds, a freshly kicked jelly bomb must hold its heading
+	# until it has three cells up. One seed proves nothing: the turn is a
+	# 1-in-3 roll, so a straight run can happen by luck.
+	var turned_early := 0
+	var turned_at_all := 0
+	for round_seed in range(1, 25):
+		var sim := _sim(1, round_seed)
+		var p: Player_ = sim.players[0]
+		p.place_at_tile_centre(1, 5)
+		sim.give_powerup(p, Types_.PowerUp.KICK)
+		sim.give_powerup(p, Types_.PowerUp.JELLY)
+		var b := sim.place_bomb(p)
+		b.place_at_tile_centre(2, 5)
+		b.fuze = 100000
+		p.move = Types_.MoveState.RIGHT
+		for _i in 40:
+			sim.tick()
+			if b.move_dir == Types_.Dir.NONE or b.detonated:
+				break
+			if b.move_dir != Types_.Dir.RIGHT:
+				turned_at_all += 1
+				if b.cells_travelled < Sim_.JELLY_TURN_AFTER_CELLS:
+					turned_early += 1
+				break
+	t.eq(turned_early, 0,
+		"no jelly bomb turns before its third cell (%d of 24 did)"
+			% turned_early)
+	t.ok(turned_at_all > 0,
+		"but they do still turn once past it (%d of 24)" % turned_at_all)
+
+	# The counter itself: a punch adds its whole three-space hop at once, so
+	# the bomb is free to turn from its first one-cell bounce and not before.
+	var s2 := _sim(1)
+	var p2: Player_ = s2.players[0]
+	p2.place_at_tile_centre(2, 5)
+	p2.facing = Types_.Dir.RIGHT
+	s2.give_powerup(p2, Types_.PowerUp.PUNCH)
+	var b2 := s2.place_bomb(p2)
+	b2.place_at_tile_centre(3, 5)
+	t.ok(s2.punch_bomb(p2), "punched")
+	t.eq(b2.cells_travelled, 0, "the punch zeroes the cell count")
+	# Sampled the moment the counter first moves, not on `not flying`: the
+	# bomb re-launches into its next bounce in the same tick it touches down,
+	# so from outside it never stops flying and the count runs on.
+	for _i in 40:
+		s2.tick()
+		if b2.cells_travelled > 0 or b2.detonated:
+			break
+	t.eq(b2.cells_travelled, 3,
+		"and the initial three-space hop puts exactly three on it")
