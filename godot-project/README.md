@@ -22,10 +22,21 @@ Without game data the data-driven suites skip and the app falls back to a
 built-in grid — it still runs, just with placeholder content. Extract game
 data first with `../tools/extract.py` (see `../tools/README.md`).
 
-Useful launch flags (see `scripts/app/main.gd`'s header comment for the
-full list): `--scheme PATH` to load a specific `.SCH` file, `--bots N`,
-`--debug-grid`, `--auto-bomb N` (force a bomb on tick N, for scripted
-screenshots).
+Launch flags go AFTER a bare `--`, which is where Godot starts handing
+arguments to the game rather than eating them itself:
+
+```bash
+godot --path . -- --players 2 --bots 4
+```
+
+Without the separator the flag is silently ignored and you get the default.
+Useful ones (see `scripts/app/main.gd`'s header comment for the full list):
+`--scheme PATH` to load a specific `.SCH` file, `--players N`, `--bots N`,
+`--scale N`, `--debug-grid`, `--auto-bomb N` (force a bomb on tick N, for
+scripted screenshots).
+
+Playing with other people — two on one keyboard, or two windows over the
+network on one machine — is `../docs/MULTIPLAYER.md`.
 
 ## Testing
 

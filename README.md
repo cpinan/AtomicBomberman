@@ -202,6 +202,7 @@ commented list of what's excluded and why.
 ```bash
 cd godot-project
 godot --path .                          # needs a copy of the disc — see below
+godot --path . -- --players 2           # two on one keyboard; flags go after --
 AB_DATA=/path/to/disc godot --path .    # point at a disc that isn't at
                                          # ../original-game
 ```
