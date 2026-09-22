@@ -61,6 +61,14 @@ var lobby_roster: Array = []
 var lobby_is_host: bool = false
 var lobby_room_code: String = ""
 
+## A one-off line under the lobby roster, counted down in ticks by main.gd.
+## Pressing Enter as a non-host did nothing visible at all — the server is
+## right to ignore it (only host_peer_id may start) but silence reads as a
+## broken key, and a live tester spent a session pressing it on the wrong
+## window.
+var lobby_notice: String = ""
+var lobby_notice_ticks: int = 0
+
 ## Which slots THIS viewer actually controls — populated by main.gd from its
 ## own keyset/pad slot lists, the same for local, host and join (a joining
 ## client still drives its own keyset locally and sends the result to the
@@ -1189,6 +1197,8 @@ func _draw_lobby() -> void:
 	lines.append("")
 	lines.append("Press Enter to start" if lobby_is_host
 		else "Waiting for the host to start…")
+	if lobby_notice_ticks > 0 and not lobby_notice.is_empty():
+		lines.append(lobby_notice)
 
 	var panel_h := 20.0 + 16.0 * lines.size()
 	var panel := Rect2(Const_.SCREEN_W / 2.0 - 180, Const_.SCREEN_H / 2.0

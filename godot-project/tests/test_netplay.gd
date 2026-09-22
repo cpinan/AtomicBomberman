@@ -31,6 +31,8 @@ func _init() -> void:
 	await _test_slot_override(t)
 	await _test_lobby_waits_for_the_host(t)
 	await _test_lobby_host_reassigned_on_departure(t)
+	await _test_three_clients_through_the_lobby(t)
+	await _test_an_action_survives_a_frame_of_silence(t)
 	quit(t.finish())
 
 
@@ -651,3 +653,166 @@ func _scheme_text() -> String:
 	for i in Const_.POWERUP_COUNT:
 		lines.append("-P,%2d, 0,0, 0, 0,x" % i)
 	return "\n".join(lines)
+
+
+## THREE PLAYERS, the whole way: a lobby, the host starting it, and all three
+## then playing the same round.
+##
+## The two-client tests cover the transport and the lobby separately. This is
+## the shape a real session actually takes — more than two people, joining a
+## room that is waiting rather than one already running — and it is what a
+## live "multiplayer is not working" report needs ruling in or out.
+func _test_three_clients_through_the_lobby(t: T_) -> void:
+	var port := PORT + 9
+	var server: Server_ = Server_.new()
+	# The last two arguments are what `--serve` uses: open a LOBBY and wait
+	# for the host, rather than starting a round the moment anyone connects.
+	if not t.ok(server.listen(port, _scheme_text(), 0, 99, false, true),
+			"the server opens a lobby on %d" % port):
+		return
+
+	var a: Client_ = Client_.new()
+	var b: Client_ = Client_.new()
+	var c: Client_ = Client_.new()
+	var all := [a, b, c]
+	t.ok(a.connect_to("ws://127.0.0.1:%d" % port, "host"), "the host connects")
+	t.ok(b.connect_to("ws://127.0.0.1:%d" % port, "player2"), "player2 connects")
+	t.ok(c.connect_to("ws://127.0.0.1:%d" % port, "player3"), "player3 connects")
+
+	for _i in 300:
+		await _pump(server, all)
+		if a.in_lobby() and b.in_lobby() and c.in_lobby():
+			break
+	if not t.ok(a.in_lobby() and b.in_lobby() and c.in_lobby(),
+			"all three reach the lobby"):
+		server.close()
+		return
+	t.eq(a.lobby_roster.size(), 3, "the roster shows all three")
+	t.ok(a.lobby_is_host, "the first to join is the host")
+	t.ok(not b.lobby_is_host and not c.lobby_is_host,
+		"and the other two are not")
+
+	# Three distinct rooms slots. In the lobby that is `lobby_slot`: `slot` is
+	# the seat in a simulation and there is no simulation yet, which is why
+	# client.gd keeps the two apart.
+	var rooms := {}
+	for client in all:
+		rooms[client.lobby_slot] = true
+	t.eq(rooms.size(), 3, "they hold three different lobby slots")
+	var roster_slots := {}
+	for entry in a.lobby_roster:
+		roster_slots[int(entry["slot"])] = true
+	t.eq(roster_slots.size(), 3, "and the broadcast roster lists all three")
+
+	# The host starts it.
+	a.request_start()
+	for _i in 300:
+		await _pump(server, all)
+		if a.playing() and b.playing() and c.playing():
+			break
+	if not t.ok(a.playing() and b.playing() and c.playing(),
+			"the host's start puts all three into the round"):
+		server.close()
+		return
+	t.eq(server.player_count(), 3, "the server has three players")
+
+	# Now that a simulation exists, each client has a real seat in it.
+	var seats := {}
+	for client in all:
+		seats[client.slot] = true
+	t.eq(seats.size(), 3, "and each is seated in a different slot")
+
+	# Play, and check every client against the server on every tick where
+	# they are level with it.
+	var checked := 0
+	var mismatches := 0
+	var script := [Types_.MoveState.RIGHT, Types_.MoveState.DOWN,
+		Types_.MoveState.LEFT, Types_.MoveState.UP]
+	for step in 240:
+		for i in all.size():
+			var client: Client_ = all[i]
+			client.send_input(script[(step / (5 + i)) % 4],
+				Types_.Action.FIRST if step % (31 + i * 7) == 0 \
+					else Types_.Action.NONE)
+		await _pump(server, all)
+		if server.sim == null:
+			continue
+		for client in all:
+			if client.sim == null or client.server_tick != server.sim.tick_count:
+				continue
+			checked += 1
+			if client.sim.state_hash() != server.sim.state_hash():
+				mismatches += 1
+
+	t.ok(checked > 45, "%d snapshots were compared across three clients"
+		% checked)
+	t.eq(mismatches, 0,
+		"[invariant] every one matched the server exactly")
+	for i in all.size():
+		var client: Client_ = all[i]
+		t.ok(client.snapshots_applied() > 20,
+			"client %d applied %d snapshots" % [i, client.snapshots_applied()])
+
+	# Each of them sees the other two, not just itself.
+	var live := 0
+	for p in a.sim.players:
+		if p.alive:
+			live += 1
+	t.ok(live >= 3, "the host sees %d live players" % live)
+
+	for client in all:
+		client.close()
+	server.close()
+
+
+## A BOMB PRESS MUST NOT BE LOST BETWEEN SERVER TICKS.
+##
+## A joined client sends its input once per RENDERED FRAME — main.gd's
+## _process() — while the server ticks at 20 Hz. So one packet carries
+## Action.FIRST and the next, a handful of milliseconds later, carries NONE.
+## The server applied each packet straight to the simulation, so the NONE
+## overwrote the FIRST before any tick consumed it, and the bomb was placed
+## only when a tick happened to land inside that window. At 120 fps that is
+## roughly one press in six.
+##
+## Reported live as "there is lag when placing bombs". It is not latency: the
+## presses are being dropped outright.
+##
+## The local path cannot hit this — main.gd's _step() calls set_input() once
+## per tick, so the edge is consumed exactly once.
+func _test_an_action_survives_a_frame_of_silence(t: T_) -> void:
+	var port := PORT + 10
+	var server: Server_ = Server_.new()
+	if not t.ok(server.listen(port, _scheme_text(), 0, 4242),
+			"the server listens on %d" % port):
+		return
+	var a: Client_ = Client_.new()
+	a.connect_to("ws://127.0.0.1:%d" % port, "presser")
+	for _i in 200:
+		await _pump(server, [a])
+		if a.playing():
+			break
+	if not t.ok(a.playing(), "the client is playing"):
+		server.close()
+		return
+
+	var before := server.sim.bombs.size()
+
+	# One press, then the silence a real client sends for the rest of the
+	# frames before the next tick. No server poll in between: this is all
+	# inside one tick's worth of wall clock.
+	a.send_input(Types_.MoveState.STILL, Types_.Action.FIRST)
+	a.poll()
+	for _i in 6:
+		a.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+		a.poll()
+	# Let the server read all seven packets and then tick.
+	for _i in 4:
+		await _pump(server, [a])
+
+	t.ok(server.sim.bombs.size() > before,
+		"the press survived the frames of silence after it (%d -> %d bombs)"
+			% [before, server.sim.bombs.size()])
+
+	a.close()
+	server.close()

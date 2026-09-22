@@ -346,6 +346,9 @@ func _handle(from: int, msg: Dictionary) -> void:
 		Protocol_.C_HELLO:
 			_join(from, msg)
 		Protocol_.C_START:
+			if OS.get_environment("AB_DEBUG_INPUT") != "":
+				print("[srv] C_START from %d, host_peer_id=%d, state=%d"
+					% [from, host_peer_id, state])
 			if from == host_peer_id:
 				_begin_from_lobby()
 		Protocol_.C_INPUT:
@@ -364,8 +367,35 @@ func _handle(from: int, msg: Dictionary) -> void:
 			# longer acted on.
 			if sim.is_bot(int(seat["slot"])):
 				return
-			sim.set_input(int(seat["slot"]), int(msg["move"]),
-				int(msg["action"]), bool(msg.get("first_held", false)))
+			# LATCH THE ACTION UNTIL A TICK CONSUMES IT.
+			#
+			# A joined client sends its input once per RENDERED FRAME
+			# (main.gd's _process) while this server ticks at 20 Hz, so a
+			# press arrives as one packet carrying Action.FIRST followed
+			# immediately by several carrying NONE. Applying each packet
+			# straight to the simulation let those NONEs overwrite the press
+			# before any tick had consumed it, and the bomb appeared only when
+			# a tick happened to land in the few milliseconds between them —
+			# about one press in six at 120 fps. Live, that reads as "there is
+			# lag when placing bombs"; the presses are not late, they are
+			# gone.
+			#
+			# So a NONE never clears a pending action; only the tick does,
+			# which _player_action() already handles by setting p.action back
+			# to NONE once it has acted on it. Movement and the held flag are
+			# still taken from every packet, because those ARE states rather
+			# than edges and the freshest one is the right one.
+			#
+			# The local path cannot hit this: _step() calls set_input() once
+			# per tick, so an edge is offered exactly once.
+			var in_slot := int(seat["slot"])
+			var action := int(msg["action"])
+			if action == Types_.Action.NONE:
+				var seated := sim.player_by_slot(in_slot)
+				if seated != null and seated.action != Types_.Action.NONE:
+					action = seated.action
+			sim.set_input(in_slot, int(msg["move"]), action,
+				bool(msg.get("first_held", false)))
 		Protocol_.C_HEARTBEAT:
 			var seat2 = peers.get(from, null)
 			if seat2 != null:

@@ -33,6 +33,15 @@ human yet.
   tick, and a status line shows the `can_*` flags, facing, and whether a bomb is
   under/ahead.
 - All 13 powerups audited against VALUELST and SOUNDLST; no further gaps found.
+- **Netplay: every action over the wire used to be dropped about five times
+  in six.** A joined client sends input once per rendered frame while the
+  server ticks at 20 Hz, so a press arrived as one FIRST packet followed by
+  several NONEs, and the server applied each straight to the sim — the NONEs
+  overwrote the press before any tick consumed it. Fixed by latching: a NONE
+  no longer clears a pending action, only the tick does. This affected bombs,
+  punch, trigger, kick-stop and grab/throw equally; all of them will have felt
+  unreliable online and none has been re-tested live since the fix.
+- `docs/MULTIPLAYER.md` is the user-facing guide to playing together.
 - Deliberately NOT built: the per-hop bomb flight model (see "In flight").
 
 ## In flight
@@ -46,6 +55,11 @@ human yet.
   why the overlap, arena-edge and "nowhere to go" cases each needed their own
   patch where the original needs none. Addresses in
   `docs/POWERUP_REVIEW_PLAN.md`.
+- `godot-project/scripts/app/main.gd` `_input()` and
+  `godot-project/scripts/net/server.gd`'s C_START handler — temporary tracing
+  behind `AB_DEBUG_INPUT=1`, printing `[key] code=... mode=... in_lobby=...
+  is_host=...` and `[srv] C_START from N, host_peer_id=M`. Kept because the
+  lobby-start problem below is not fully explained; remove once it is.
 - `godot-project/scripts/sim/sim.gd` `_explain_action()` — temporary
   scaffolding behind `AB_DEBUG_ACTIONS=1`. Delete it once the on-screen action
   history (step 3 of `docs/POWERUP_TEST_RANGE_PLAN.md`) exists.
@@ -85,6 +99,11 @@ exactly like a real regression and is not one.
 - Observed 2026-09-21, not chased: a player stood on tiles `(0,7)` and `(7,0)`,
   the arena's outer ring. Either legitimate scheme data for that level or a
   border that is not solid. Unrelated to powerups, so left alone.
+- **A host once pressed Enter in the lobby and the round did not start**, with
+  the key proven to reach `_input` (`code=4194309 mode=2 in_lobby=true`). A
+  later run with the same code started fine and the trace showed the whole
+  chain working, so the cause is unknown and it may be a race on `lobby_is_host`
+  arriving with S_LOBBY. `AB_DEBUG_INPUT=1` will catch it next time.
 - Whether to do the per-hop flight rework at all, or keep the landing-cell
   model now that its known symptoms are patched.
 
@@ -115,6 +134,13 @@ exactly like a real regression and is not one.
 - **Do not "fix" a punch into a wall by refusing it.** MANUAL.BM: "Throw and
   punch your bombs over the wall to destroy your opponents." A punch refuses
   only when the whole line, wrapped, has no free cell.
+- **Launch flags only reach the game after a bare `--`.** `godot --path .
+  -- --serve 47600` works; without the separator Godot eats it and you get a
+  default local game. Measured: `-- --scale 1` gives a 640x480 window, the
+  plain form 1920x1440.
+- **A non-host pressing Enter in the lobby is correctly ignored** — the server
+  only honours C_START from `host_peer_id`. It used to do so silently, which
+  cost a live session; the lobby now says "Only the host can start this game".
 - **Six bombermen with `--players 1` is not a bug** — starting a match from the
   in-game menu replaces the CLI solo setup with the menu's roster, AI included.
   Check the scheme name in the log first.

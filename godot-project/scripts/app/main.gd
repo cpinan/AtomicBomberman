@@ -1190,6 +1190,8 @@ func _poll_client(delta: float) -> void:
 			return
 		if view != null:
 			view.lobby_active = client.in_lobby()
+			if view.lobby_notice_ticks > 0:
+				view.lobby_notice_ticks -= 1
 			if view.lobby_active:
 				view.lobby_roster = client.lobby_roster
 				view.lobby_is_host = client.lobby_is_host
@@ -1742,6 +1744,15 @@ func _editor_key(keycode: int, shift: bool = false) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	# TEMPORARY: AB_DEBUG_INPUT=1 traces where a keypress goes. Remove once
+	# the live lobby-start report is settled.
+	if event is InputEventKey and (event as InputEventKey).pressed \
+			and OS.get_environment("AB_DEBUG_INPUT") != "":
+		print("[key] code=%d mode=%d client=%s in_lobby=%s state=%s is_host=%s" % [
+			(event as InputEventKey).keycode, mode, client != null,
+			client.in_lobby() if client != null else false,
+			client.state if client != null else -1,
+			client.lobby_is_host if client != null else false])
 	if mode == Mode.MENU:
 		_menu_input(event)
 		return
@@ -1754,7 +1765,16 @@ func _input(event: InputEvent) -> void:
 		var lobby_key := (event as InputEventKey).keycode
 		if lobby_key == KEY_ENTER or lobby_key == KEY_KP_ENTER \
 				or lobby_key == KEY_SPACE:
-			client.request_start()
+			if client.lobby_is_host:
+				if OS.get_environment("AB_DEBUG_INPUT") != "":
+					print("[key] -> sending C_START")
+				client.request_start()
+			elif view != null:
+				# The server drops a C_START from anyone but the host, which
+				# is correct and completely invisible. Say so on the screen
+				# the key was pressed on.
+				view.lobby_notice = "Only the host can start this game"
+				view.lobby_notice_ticks = 60
 			return
 	if keys != null:
 		keys.handle(event)
