@@ -1676,8 +1676,16 @@ func _editor_target(tile: Vector2i) -> Player_:
 	return sim.player_by_slot(0)
 
 
-func _editor_key(keycode: int) -> void:
+func _editor_key(keycode: int, shift: bool = false) -> void:
 	match keycode:
+		KEY_N:
+			# WHICH POWERUP the editor places and gives. N alone steps
+			# forward, shift-N back. The brackets below still work and were
+			# what this used to be, but they sit behind a modifier on several
+			# keyboard layouts and were awkward to reach mid-test.
+			view.editor_powerup = posmod(
+				view.editor_powerup + (-1 if shift else 1),
+				Const_.POWERUP_COUNT)
 		KEY_BRACKETLEFT:
 			view.editor_powerup = posmod(view.editor_powerup - 1,
 				Const_.POWERUP_COUNT)
@@ -1827,7 +1835,7 @@ func _input(event: InputEvent) -> void:
 				if mode == Mode.HOST and server != null:
 					server.override_next_slot()
 		if view != null and view.editor_active:
-			_editor_key(pressed.keycode)
+			_editor_key(pressed.keycode, pressed.shift_pressed)
 	if view != null and view.editor_active and sim != null:
 		if event is InputEventMouseMotion:
 			view.editor_cursor = _editor_tile_at(

@@ -4,6 +4,13 @@
 # path if it lives somewhere else.
 /original-game/
 
+# Other copies of the disc, for the same reason. win/Bomberman and
+# win/Atomic Bomberman - CDRIP are further installs of the same game; the
+# CDRIP one also carries the printed manual as a PDF, which is the most
+# detailed prose source there is (docs/STATUS.md says where to look). Same
+# rule: read it in place, never redistribute it through this repo.
+/win/
+
 # Third-party reference ports (fpc_atomic, AtomBomberman, Atomic-Bomberman) —
 # not code this project wrote, and each is already its own git repository.
 # Given, read, cited (docs/ORACLE.md, docs/BUGS.md) — never vendored in.

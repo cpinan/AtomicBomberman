@@ -1407,17 +1407,22 @@ func _test_a_throw_at_the_edge_wraps(t: T_) -> void:
 	t.eq(Sim_._wrap_ty(-1), -1, "but not one cell before it")
 
 
-## A THROWN BOMB BOUNCES ALONG, like a punched one.
+## A THROWN BOMB LANDS AND STOPS — unless the cell is taken, and then it
+## hops on to the next free one.
 ##
-## SOUNDLST.RES names the sound "a punched/GRABBED bomb bouncing along", and
-## VALUELST 660/661 are "initial three-space punch bounces" and "subsequent
-## small 1-space punch bounces" — one tall hop over three cells, then one-cell
-## hops at the smaller arc. This port gave a thrown bomb no bounces at all
-## (`cells_travelled = 0`), so it stopped dead where it first landed, and capped a
-## punched one at three — a number from nowhere, needed only because every hop
-## re-launched the bomb and re-armed its fuze, so nothing else could ever end
-## the bouncing.
+## BM95.EXE 0x423A60 tests the cell at the end of each hop and only skips the
+## come-to-rest code (`[bomb+0x2e] = 0`) when something is in the way:
+## `cell_at` solid, or `bomb_at_tile` occupied. That is what VALUELST 661's
+## "subsequent small 1-space punch bounces" are for — getting past occupied
+## ground, not travelling for its own sake. Bouncing unconditionally sent a
+## punched bomb hopping the length of the arena, reported live as "the bomb
+## jumps a lot".
+##
+## SOUNDLST 160 is "a punched/GRABBED bomb bouncing along", so a thrown bomb
+## behaves exactly as a punched one here; it used to be given no bounces at
+## all and stopped dead even on top of another bomb.
 func _test_a_grabbed_bomb_bounces_along(t: T_) -> void:
+	# CLEAR GROUND: three cells and stop.
 	var sim := _sim(1)
 	var p: Player_ = sim.players[0]
 	p.place_at_tile_centre(2, 5)
@@ -1431,49 +1436,54 @@ func _test_a_grabbed_bomb_bounces_along(t: T_) -> void:
 	sim.tick()
 	t.ok(b.flying, "and thrown")
 
-	# The first hop covers three cells, landing on tile 5. If it bounces on it
-	# must end up PAST that; if it stops dead it ends on it. Measured by where
-	# it gets to rather than by watching `flying`, which never reads false
-	# from outside: the bomb re-launches in the same tick it touches down.
-	var furthest := b.tile_x()
-	for _i in 100:
-		sim.tick()
-		if b.detonated:
-			break
-		furthest = maxi(furthest, b.tile_x())
-		if not b.flying and b.move_dir == Types_.Dir.NONE:
-			break
-	t.ok(furthest > 5,
-		"a thrown bomb bounces on past its first landing (reached %d, first "
-			% furthest + "landing is tile 5)")
-
 	# THE FUZE DOES NOT RUN IN THE AIR — BM95.EXE 0x423F02 skips the timer
-	# advance for a bomb in the punched or bouncing state, and the printed
-	# manual says it of The Hand: "The bomb is not active until it hits the
-	# ground." So a hop must neither re-arm the timer nor burn it.
+	# advance for the punched and bouncing states, and the printed manual
+	# says it of The Hand: "The bomb is not active until it hits the ground."
+	# Sampled WHILE STILL AIRBORNE: once it settles the fuze resumes.
+	var fuze_aloft := b.fuze
+	for _i in 3:
+		sim.tick()
+		if not b.flying:
+			break
+	t.ok(b.flying, "still in the air a few ticks in")
+	t.eq(b.fuze, fuze_aloft, "and its fuze has not moved")
+
+	for _i in 60:
+		sim.tick()
+		if b.detonated or (not b.flying and b.move_dir == Types_.Dir.NONE):
+			break
+	t.eq(b.tile_x(), 5, "it lands three cells on and STOPS there")
+	t.eq(b.tile_y(), 5, "on the same row")
+
+	# OCCUPIED GROUND: hop past it to the next free cell.
 	var s2 := _sim(1)
 	var p2: Player_ = s2.players[0]
 	p2.place_at_tile_centre(2, 5)
 	p2.facing = Types_.Dir.RIGHT
 	s2.give_powerup(p2, Types_.PowerUp.PUNCH)
+	s2.give_powerup(p2, Types_.PowerUp.BOMB)
+	var sitting := s2.place_bomb(p2)
+	sitting.place_at_tile_centre(6, 5)        # where a punch from 3 would land
+	sitting.fuze = 100000
 	var b2 := s2.place_bomb(p2)
 	b2.place_at_tile_centre(3, 5)
 	t.ok(s2.punch_bomb(p2), "punched")
-	var fuze_at_launch := b2.fuze
-	for _i in 12:
+	for _i in 60:
 		s2.tick()
-		if not b2.flying:
+		if b2.detonated or (not b2.flying and b2.move_dir == Types_.Dir.NONE):
 			break
-	t.eq(b2.fuze, fuze_at_launch,
-		"the fuze does not move while the bomb is in the air")
+	t.ok(b2.tile_x() > 6,
+		"it hops PAST the occupied cell rather than onto it (rested at %d)"
+			% b2.tile_x())
+	t.ok(b2.tile_x() != sitting.tile_x() or b2.tile_y() != sitting.tile_y(),
+		"[invariant] never on the same cell as the bomb already there")
 
-	# It is running into something that ends the bouncing, and once the bomb
-	# is down again its fuze resumes and it goes off.
-	for _i in 400:
+	# And once down, the fuze runs again and it goes off.
+	for _i in 200:
 		s2.tick()
 		if b2.detonated:
 			break
-	t.ok(b2.detonated, "it comes to rest and then detonates")
+	t.ok(b2.detonated, "a bomb that has come to rest detonates on its fuze")
 
 
 ## A JELLY BOMB RUNS ITS FIRST THREE CELLS STRAIGHT — BM95.EXE 0x423991:

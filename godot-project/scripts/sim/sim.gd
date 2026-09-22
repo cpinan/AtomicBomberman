@@ -1843,26 +1843,31 @@ func _fly_bomb(b: Bomb_) -> void:
 	_play(b.owner, Types_.SoundEffect.BOMB_THROWN)
 	_bomb_on_the_head(b)
 
-	# IT BOUNCES ON, one cell at a time, until something stops it or its fuze
-	# runs out. VALUELST 660 and 661 are "initial three-space punch bounces"
-	# and "subsequent small 1-space punch bounces" — the first hop covers the
-	# three cells at the tall arc, every hop after that covers one at the
-	# small one. SOUNDLST 160 is "a punched/GRABBED bomb bouncing along", so a
-	# thrown bomb does this too; it used to be given no bounces at all and
-	# simply stopped dead where it landed.
+	# IT COMES TO REST HERE UNLESS THE CELL IS TAKEN — BM95.EXE 0x423A60
+	# onward. At the end of a hop the original tests the cell it arrived on
+	# and, only if something is in the way, skips the come-to-rest code and
+	# hops again:
 	#
-	# No bounce count any more: running into something is what ends it. A
-	# bomb in the air does not tick at all (see _tick_bombs), so the fuze
-	# cannot be what stops it, and the arena's solid border always can — a
-	# bounce is refused into a blocked cell, and the border stays blocked
-	# after the wrap. The landing cell is wrapped for the same reason the
-	# flight is: a bomb bouncing along is still travelling over the arena
-	# wall, not into it.
-	if b.move_dir != Types_.Dir.NONE:
+	#     cell_at(x, y)       ; solid or brick -> keep bouncing
+	#     bomb_at_tile(x, y)  ; already a bomb -> keep bouncing
+	#     ...
+	#     [bomb+0x2e] = 0     ; otherwise STATE 0, at rest
+	#
+	# That is what VALUELST 661's "subsequent small 1-space punch bounces"
+	# are for: getting PAST occupied ground, not travelling for its own sake.
+	# An earlier pass here bounced unconditionally, which sent a punched bomb
+	# hopping the length of the arena — reported live as "the bomb jumps a
+	# lot". SOUNDLST 160, "a punched/GRABBED bomb bouncing along", is why a
+	# thrown bomb gets the same treatment as a punched one.
+	#
+	# The next cell is wrapped for the same reason the flight is: a bomb
+	# bouncing along is still travelling over the arena wall, not into it.
+	if b.move_dir != Types_.Dir.NONE \
+			and _bomb_blocked(b, b.tile_x(), b.tile_y(), true):
 		var step: Vector2i = Types_.DIR_VEC[b.move_dir]
 		var tx := _wrap_tx(b.tile_x() + step.x)
 		var ty := _wrap_ty(b.tile_y() + step.y)
-		if Field_.in_bounds(tx, ty) and not _bomb_blocked(b, tx, ty, true):
+		if Field_.in_bounds(tx, ty):
 			_launch(b, tx, ty, Values_.V[Const_.Res.PUNCH_ARC_SMALL],
 				Values_.V[Const_.Res.PUNCHED_BOMB_SPEED], false)
 			return

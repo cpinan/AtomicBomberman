@@ -1212,17 +1212,25 @@ func _draw_test_editor() -> void:
 	var name: String = EDITOR_POWERUP_NAMES[editor_powerup] \
 		if editor_powerup >= 0 and editor_powerup < EDITOR_POWERUP_NAMES.size() \
 		else "?"
+	# THREE LINES, not five. The panel sits at the foot of the screen and
+	# every line of it eats into the bottom row of the playfield, so the keys
+	# are packed onto one line rather than laid out one group per line.
 	var lines := [
-		"TEST EDITOR — T to leave",
-		"LMB cycle brick   RMB place powerup   [ ] choose: %s" % name,
-		"G give it   X strip player   B bomb   K kill   D disease   C cure",
-		"R clear field   P pause   . step one tick",
+		"TEST EDITOR — T leave   N powerup: %s   G give   X strip" % name,
+		"LMB brick  RMB place  B bomb  K kill  D disease  C cure  "
+			+ "R clear  P pause  . step",
 		_editor_player_state(),
 	]
-	draw_rect(Rect2(0, 0, Const_.SCREEN_W, 11 * lines.size() + 6),
-		Color(0, 0, 0, 0.6))
+	# ALONG THE BOTTOM, not the top: the status band at the top carries the
+	# clock and the score, and a panel drawn over y=0 sat right on the timer.
+	# The foot of the screen is the one strip the playfield does not use —
+	# FIELD_Y_OFF leaves BOTTOM_MARGIN below the last row of cells — and what
+	# little it does cover is border art rather than anything being read.
+	var panel_h: int = 11 * lines.size() + 6
+	var top: float = float(Const_.SCREEN_H - panel_h)
+	draw_rect(Rect2(0, top, Const_.SCREEN_W, panel_h), Color(0, 0, 0, 0.75))
 	for i in lines.size():
-		draw_string(font, Vector2(4, 10 + i * 11), lines[i],
+		draw_string(font, Vector2(4, top + 10 + i * 11), lines[i],
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(1, 1, 0.6))
 
 
