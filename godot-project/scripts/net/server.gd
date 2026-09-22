@@ -237,9 +237,27 @@ func poll(delta_ms: float) -> int:
 	# Silence is measured in real time and BEFORE the pause decision, so a
 	# client that has stopped talking is dropped even though the pause it
 	# caused has stopped the simulation. See TIMEOUT_MS.
-	for id in peers:
-		var seat: Dictionary = peers[id]
-		seat["silent_ms"] = float(seat["silent_ms"]) + delta_ms
+	# SILENCE IN A LOBBY IS NORMAL, NOT A FAULT. A client only sends C_INPUT
+	# once a round is running and C_HEARTBEAT once it has a sim to be behind
+	# on, so a room that is still WAITING hears nothing from anybody — and
+	# the reaper below was dropping every peer the moment they had sat in the
+	# lobby for TIMEOUT_MS, while their windows were open and connected and
+	# still sending C_START.
+	#
+	# Live, that is what "Enter is not working" was: by the time the host
+	# pressed it, the server had already released both of them and
+	# host_peer_id was -1, so every C_START was refused in silence:
+	#
+	#     server: HOST left (slot 0)
+	#     server: player2 left (slot 1)
+	#     [srv] C_START from 922376940, host_peer_id=-1, state=0
+	#
+	# A genuinely dead socket in a lobby is still noticed — the peer's own
+	# disconnect does that, not this timer.
+	if state != State.WAITING:
+		for id in peers:
+			var seat: Dictionary = peers[id]
+			seat["silent_ms"] = float(seat["silent_ms"]) + delta_ms
 	_accept_and_drop()
 	_receive()
 
@@ -346,6 +364,12 @@ func _handle(from: int, msg: Dictionary) -> void:
 		Protocol_.C_HELLO:
 			_join(from, msg)
 		Protocol_.C_START:
+			# Before judging who asked: a room with people in it must have a
+			# host, and if it has somehow lost one this is the last moment to
+			# notice. Live, a lobby reached host_peer_id = -1 with two peers
+			# still connected and then refused every C_START — the round
+			# could not be started at all and the key looked dead.
+			_ensure_host()
 			if OS.get_environment("AB_DEBUG_INPUT") != "":
 				print("[srv] C_START from %d, host_peer_id=%d, state=%d"
 					% [from, host_peer_id, state])
@@ -430,8 +454,7 @@ func _join(from: int, msg: Dictionary) -> void:
 			return
 		peers[from] = {"slot": lobby_slot, "name": name, "last_tick": 0,
 			"silent_ms": 0.0, "ready": false}
-		if host_peer_id < 0:
-			host_peer_id = from
+		_ensure_host()
 		_broadcast_lobby()
 		player_joined.emit(lobby_slot, name)
 		_note("%s joined the lobby as slot %d" % [name, lobby_slot])
@@ -538,9 +561,25 @@ func _release(id: int) -> void:
 		# The room outlives whoever happened to open it — the next remaining
 		# peer inherits C_START rather than the lobby getting stuck with no
 		# one able to start it.
-		if id == host_peer_id:
-			host_peer_id = peers.keys()[0] if not peers.is_empty() else -1
+		_ensure_host()
 		_broadcast_lobby()
+
+
+## THE ROOM ALWAYS HAS A HOST WHILE ANYONE IS IN IT.
+##
+## host_peer_id is whoever may send C_START. It used to be set on the first
+## join and patched up on a departure, which left two ways for it to end up
+## naming nobody while peers were still connected — and then the lobby was
+## stuck: the server refused every C_START and the host's Enter did nothing,
+## with no message to say why. Rather than chase which sequence of joins and
+## drops produced it, this states the invariant and is called from every
+## place that can disturb it: a join, a release, and C_START itself.
+func _ensure_host() -> void:
+	if peers.is_empty():
+		host_peer_id = -1
+		return
+	if not peers.has(host_peer_id):
+		host_peer_id = peers.keys()[0]
 
 
 ## A seat for an arriving player. A bot's seat is fair game — a human turning up
@@ -586,6 +625,17 @@ func _broadcast(data: PackedByteArray) -> void:
 
 
 func _send(to: int, data: PackedByteArray) -> void:
+	# A PEER WHOSE SOCKET HAS ALREADY GONE is not an error to be shouted
+	# about. _release() broadcasts the new roster to whoever is left, and
+	# when two people leave at once the second one's socket is closing while
+	# that broadcast goes out — put_packet() then logs an engine-level
+	# "Condition ready_state != STATE_OPEN is true" for something entirely
+	# routine. verify.sh reads those as a suite that died, and it is right to:
+	# a real error here would be invisible among them.
+	if _peer.get_peer(to) == null \
+			or _peer.get_peer(to).get_ready_state() \
+				!= WebSocketPeer.STATE_OPEN:
+		return
 	if stats != null:
 		stats.bump(Stats_.C.PACKETS_OUT)
 		stats.bump(Stats_.C.BYTES_OUT, data.size())

@@ -14,6 +14,7 @@ const Server_ := preload("res://scripts/net/server.gd")
 const Client_ := preload("res://scripts/net/client.gd")
 const Protocol_ := preload("res://scripts/net/protocol.gd")
 const Stats_ := preload("res://scripts/core/stats.gd")
+const Player_ := preload("res://scripts/sim/player.gd")
 
 # A high port, so a developer machine is unlikely to have it in use. If it is,
 # the suite says so rather than failing mysteriously.
@@ -33,6 +34,9 @@ func _init() -> void:
 	await _test_lobby_host_reassigned_on_departure(t)
 	await _test_three_clients_through_the_lobby(t)
 	await _test_an_action_survives_a_frame_of_silence(t)
+	await _test_a_lobby_always_has_a_host(t)
+	await _test_a_lobby_does_not_reap_people_for_waiting(t)
+	await _test_animation_timers_reach_the_client(t)
 	quit(t.finish())
 
 
@@ -813,6 +817,196 @@ func _test_an_action_survives_a_frame_of_silence(t: T_) -> void:
 	t.ok(server.sim.bombs.size() > before,
 		"the press survived the frames of silence after it (%d -> %d bombs)"
 			% [before, server.sim.bombs.size()])
+
+	a.close()
+	server.close()
+
+
+## A ROOM WITH PEOPLE IN IT ALWAYS HAS A HOST.
+##
+## host_peer_id names whoever may send C_START. Live, a lobby reached
+## host_peer_id = -1 with two peers still connected, and then refused every
+## C_START — the round could not be started at all, and because the refusal
+## is silent the host's Enter simply looked dead:
+##
+##     [srv] C_START from 922376940, host_peer_id=-1, state=0
+##
+## _ensure_host() states the invariant instead of patching it at each call
+## site, and is called on join, on release, and on C_START itself.
+func _test_a_lobby_always_has_a_host(t: T_) -> void:
+	var port := PORT + 11
+	var server: Server_ = Server_.new()
+	if not t.ok(server.listen(port, _scheme_text(), 0, 7, false, true),
+			"the server opens a lobby on %d" % port):
+		return
+
+	var a: Client_ = Client_.new()
+	var b: Client_ = Client_.new()
+	a.connect_to("ws://127.0.0.1:%d" % port, "first")
+	b.connect_to("ws://127.0.0.1:%d" % port, "second")
+	for _i in 200:
+		await _pump(server, [a, b])
+		if a.in_lobby() and b.in_lobby():
+			break
+	if not t.ok(a.in_lobby() and b.in_lobby(), "both reach the lobby"):
+		server.close()
+		return
+	t.ok(server.host_peer_id >= 0, "the room has a host")
+	t.ok(a.lobby_is_host and not b.lobby_is_host,
+		"exactly one of them is told they are it")
+
+	# EVERYONE LEAVES. The room is empty and has no host, which is correct.
+	a.close()
+	b.close()
+	for _i in 60:
+		await _pump(server, [])
+	t.eq(server.host_peer_id, -1, "an empty room has no host")
+
+	# AND THEN PEOPLE COME BACK. The room must adopt one, or it is stuck
+	# forever with nobody able to start.
+	var c: Client_ = Client_.new()
+	var d: Client_ = Client_.new()
+	c.connect_to("ws://127.0.0.1:%d" % port, "third")
+	d.connect_to("ws://127.0.0.1:%d" % port, "fourth")
+	for _i in 200:
+		await _pump(server, [c, d])
+		if c.in_lobby() and d.in_lobby():
+			break
+	if not t.ok(c.in_lobby() and d.in_lobby(), "both rejoin the lobby"):
+		server.close()
+		return
+	t.ok(server.host_peer_id >= 0,
+		"the refilled room has a host again (%d)" % server.host_peer_id)
+	t.ok(c.lobby_is_host != d.lobby_is_host,
+		"and exactly one of the two is it")
+
+	# The one who holds it can actually start the round.
+	var host_client: Client_ = c if c.lobby_is_host else d
+	host_client.request_start()
+	for _i in 200:
+		await _pump(server, [c, d])
+		if c.playing() and d.playing():
+			break
+	t.ok(c.playing() and d.playing(),
+		"and the round starts — the lobby is not wedged")
+
+	c.close()
+	d.close()
+	server.close()
+
+
+## SITTING IN A LOBBY IS NOT BEING SILENT.
+##
+## A client sends C_INPUT only once a round is running, and C_HEARTBEAT only
+## once it has a sim to be behind on. A room that is still WAITING therefore
+## hears nothing from anybody — and the silent-peer reaper ran anyway, so
+## every peer was released after TIMEOUT_MS (30 s) with their windows open,
+## connected, and still sending C_START. The observed live sequence:
+##
+##     server: HOST joined the lobby as slot 0
+##     server: player2 joined the lobby as slot 1
+##     server: HOST left (slot 0)         <- nobody closed anything
+##     server: player2 left (slot 1)
+##     [srv] C_START from 922376940, host_peer_id=-1, state=0
+##
+## which is what "Enter is not working" was: take longer than half a minute
+## to decide, and the lobby has quietly thrown everyone out.
+func _test_a_lobby_does_not_reap_people_for_waiting(t: T_) -> void:
+	var port := PORT + 12
+	var server: Server_ = Server_.new()
+	if not t.ok(server.listen(port, _scheme_text(), 0, 11, false, true),
+			"the server opens a lobby on %d" % port):
+		return
+
+	var a: Client_ = Client_.new()
+	var b: Client_ = Client_.new()
+	a.connect_to("ws://127.0.0.1:%d" % port, "patient")
+	b.connect_to("ws://127.0.0.1:%d" % port, "alsopatient")
+	for _i in 200:
+		await _pump(server, [a, b])
+		if a.in_lobby() and b.in_lobby():
+			break
+	if not t.ok(a.in_lobby() and b.in_lobby(), "both reach the lobby"):
+		server.close()
+		return
+	t.eq(server.player_count_in_lobby() if server.has_method(
+		"player_count_in_lobby") else server.peers.size(), 2,
+		"the room holds two people")
+
+	# Wait out well past the reaper's timeout, saying nothing — exactly what
+	# two people reading the screen do.
+	for _i in 4:
+		server.poll(float(Server_.TIMEOUT_MS))
+		a.poll()
+		b.poll()
+		await process_frame
+
+	t.eq(server.peers.size(), 2,
+		"they are both still in the room after %d s of quiet"
+			% (4 * Server_.TIMEOUT_MS / 1000))
+	t.ok(a.in_lobby() and b.in_lobby(), "and both still think so")
+	t.ok(server.host_peer_id >= 0, "the room still has a host")
+
+	# And the host can still start it.
+	var host_client: Client_ = a if a.lobby_is_host else b
+	host_client.request_start()
+	for _i in 200:
+		await _pump(server, [a, b])
+		if a.playing() and b.playing():
+			break
+	t.ok(a.playing() and b.playing(),
+		"the round starts after the wait, rather than the lobby being empty")
+
+	a.close()
+	b.close()
+	server.close()
+
+
+## A CLIENT CAN ONLY DRAW WHAT THE SNAPSHOT CARRIES.
+##
+## game_view.gd gates each animation on a counter: the death sequence on
+## `dying and death_anim > 0`, KICK.ANI on kick_ticks, PUNCH.ANI on
+## punch_ticks, the cornerhead poses on cornerhead. A joined client never
+## ticks a simulation, so if those do not cross the wire they read zero for
+## ever and the animation simply never plays. They did not, and a live
+## netplay session reported "no dead animation".
+func _test_animation_timers_reach_the_client(t: T_) -> void:
+	var port := PORT + 13
+	var server: Server_ = Server_.new()
+	if not t.ok(server.listen(port, _scheme_text(), 0, 4242),
+			"the server listens on %d" % port):
+		return
+	var a: Client_ = Client_.new()
+	a.connect_to("ws://127.0.0.1:%d" % port, "watcher")
+	for _i in 200:
+		await _pump(server, [a])
+		if a.playing():
+			break
+	if not t.ok(a.playing(), "the client is playing"):
+		server.close()
+		return
+
+	# Set the four counters on the server's own simulation and let one
+	# snapshot carry them across.
+	var victim: Player_ = server.sim.players[0]
+	victim.dying = true
+	victim.death_anim = 7
+	victim.kick_ticks = 5
+	victim.punch_ticks = 4
+	victim.cornerhead = 9
+	victim.cornerhead_ticks = 3
+	for _i in 40:
+		await _pump(server, [a])
+		if a.sim != null and a.sim.players[0].death_anim == 7:
+			break
+
+	var seen: Player_ = a.sim.players[0]
+	t.eq(seen.death_anim, 7,
+		"death_anim reaches the client — without it no death animation plays")
+	t.eq(seen.kick_ticks, 5, "and kick_ticks, for KICK.ANI")
+	t.eq(seen.punch_ticks, 4, "and punch_ticks, for PUNCH.ANI")
+	t.eq(seen.cornerhead, 9, "and cornerhead, for the boxed-in poses")
+	t.eq(seen.cornerhead_ticks, 3, "and its own frame counter")
 
 	a.close()
 	server.close()

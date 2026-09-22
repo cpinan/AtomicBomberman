@@ -22,7 +22,7 @@ const Player_ := preload("res://scripts/sim/player.gd")
 const Bomb_ := preload("res://scripts/sim/bomb.gd")
 
 ## Bumped when the layout changes, alongside Protocol.VERSION.
-const LAYOUT := 2
+const LAYOUT := 3
 
 
 static func write(sim: RefCounted) -> PackedByteArray:
@@ -179,6 +179,13 @@ static func _read_player(p: Player_, d: PackedByteArray, at: int) -> void:
 	p.fly_to_x = d[pos]; pos += 1
 	p.fly_to_y = d[pos]; pos += 1
 	p.warp_cooldown = _get_i32(d, pos); pos += 4
+	# Read in the same order player.gd's to_bytes() writes them — see the
+	# comment there for why the animation timers have to cross the wire.
+	p.death_anim = _get_i32(d, pos); pos += 4
+	p.kick_ticks = _get_i32(d, pos); pos += 4
+	p.punch_ticks = _get_i32(d, pos); pos += 4
+	p.cornerhead = _get_i32(d, pos); pos += 4
+	p.cornerhead_ticks = _get_i32(d, pos); pos += 4
 	p.invulnerable = _get_i32(d, pos); pos += 4
 	p.pickups = _get_i32(d, pos); pos += 4
 	for i in Const_.POWERUP_COUNT:

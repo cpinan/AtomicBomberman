@@ -50,7 +50,12 @@ const Const_ := preload("res://scripts/core/const.gd")
 ## that joins while the room is still WAITING gets S_LOBBY instead of
 ## S_WELCOME; S_WELCOME itself is unchanged and still means "the round has
 ## begun, here is your slot" — it is only sent later now, for a lobby room.
-const VERSION := 5
+## 5 -> 6: a player record carries its ANIMATION TIMERS — death_anim,
+## kick_ticks, punch_ticks, cornerhead and cornerhead_ticks. A client never
+## ticks a simulation, so anything game_view.gd gates an animation on has to
+## arrive in the snapshot; without these a networked player died, kicked and
+## punched with no animation at all. Snapshot.LAYOUT moves alongside this.
+const VERSION := 6
 
 # Client -> server
 const C_HELLO := 1        ## name, protocol version

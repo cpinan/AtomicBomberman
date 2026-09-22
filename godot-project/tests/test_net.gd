@@ -385,8 +385,13 @@ func _test_match_message(t: T_) -> void:
 	# And again for S_SLOT_OVERRIDDEN (the host-override key), and again for
 	# C_START/S_LOBBY (the pre-game lobby) — two more new message types, not
 	# layout changes to an existing one, but tracked here anyway so this
-	# assertion stays the one place that has to move when it does.
-	t.eq(Protocol_.VERSION, 5, "the protocol version moved with each layout")
+	# assertion stays the one place that has to move when it does. And again
+	# for the player record's animation timers (death_anim, kick_ticks,
+	# punch_ticks, cornerhead, cornerhead_ticks): a client draws only what the
+	# snapshot carries, so without them a networked player died, kicked and
+	# punched with no animation — and a version-5 client reading a version-6
+	# record would misread everything after warp_cooldown.
+	t.eq(Protocol_.VERSION, 6, "the protocol version moved with each layout")
 
 
 # The client rebuilds its field when a match message names a different LEVEL.

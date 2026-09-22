@@ -263,6 +263,21 @@ func to_bytes() -> PackedByteArray:
 	b.append(clampi(fly_to_x, 0, 255))
 	b.append(clampi(fly_to_y, 0, 255))
 	_append_i32(b, warp_cooldown)
+	# THE ANIMATION TIMERS TRAVEL TOO. A client never ticks a simulation — it
+	# draws whatever the snapshot says — so anything the view reads has to be
+	# in here. These four were not, and every one of them is a gate on an
+	# animation: game_view.gd draws the death sequence only when
+	# `dying and death_anim > 0`, the KICK.ANI frames only while kick_ticks
+	# is above zero, PUNCH.ANI only while punch_ticks is, and one of the 13
+	# cornerhead poses only while cornerhead is. On a joined client all four
+	# read zero for ever, so a player over the network died, kicked, punched
+	# and got boxed in with no animation at all — "no dead animation" from a
+	# live netplay session.
+	_append_i32(b, death_anim)
+	_append_i32(b, kick_ticks)
+	_append_i32(b, punch_ticks)
+	_append_i32(b, cornerhead)
+	_append_i32(b, cornerhead_ticks)
 	_append_i32(b, invulnerable)
 	_append_i32(b, pickups)
 	for c in collected:
