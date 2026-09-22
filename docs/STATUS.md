@@ -4,18 +4,20 @@ _Last updated: 2026-09-21 · branch `main` · 0 uncommitted files_
 
 ## Next action
 
-Live-playtest the three fixes in `7e574d2` — throw a bomb off an arena edge (it
-should reappear on the far side, not drop at your feet), throw two bombs at the
-same cell (they must not stack), and catch a disease (the tint should flash
-on/off twice a second). None has been seen by a human yet.
+Live-playtest `7e574d2` and `4a4fed8` — throw a bomb off an arena edge (it
+should reappear on the far side, not drop at your feet), throw two bombs at
+the same cell (they must not stack), throw one along an open row (it should
+bounce on, one cell at a time, until it goes off rather than stopping dead),
+and catch a disease (the tint should flash on/off twice a second). None of it
+has been seen by a human yet.
 
 ## State
 
-- Sixteen powerup bugs fixed across three commits this session, all with
-  regression tests in `godot-project/tests/test_abilities.gd` (260 checks).
+- Eighteen powerup bugs fixed across four commits this session, all with
+  regression tests in `godot-project/tests/test_abilities.gd` (265 checks).
   `tools/verify.sh` green.
 - The gloves, kick and the action button are **live-confirmed working** as of
-  this session. Everything in `0a06b1a` and `7e574d2` is not.
+  this session. Everything in `0a06b1a`, `7e574d2` and `4a4fed8` is not.
 - Three powerup rules now come from BM95.EXE rather than inference, each
   commented with its address: the kick gate (`0x41EE51`), re-kicking a rolling
   bomb (`0x42464B`), and the jelly quarter turn (`0x423A1E`). `tools/bmexe.py`
