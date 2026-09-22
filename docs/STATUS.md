@@ -4,20 +4,26 @@ _Last updated: 2026-09-21 · branch `main` · 0 uncommitted files_
 
 ## Next action
 
-Live-playtest `7e574d2` and `4a4fed8` — throw a bomb off an arena edge (it
-should reappear on the far side, not drop at your feet), throw two bombs at
-the same cell (they must not stack), throw one along an open row (it should
-bounce on, one cell at a time, until it goes off rather than stopping dead),
-and catch a disease (the tint should flash on/off twice a second). None of it
-has been seen by a human yet.
+Live-playtest everything from `7e574d2` onward — throw a bomb off an arena
+edge (it should reappear on the far side, not drop at your feet), throw two
+at the same cell (they must not stack), throw one along an open row (it
+should bounce on a cell at a time and only tick once it settles), kick a
+jelly bomb (straight for three cells, then wandering), and catch a disease
+(the tint should flash on/off twice a second). None of it has been seen by a
+human yet.
 
 ## State
 
-- Eighteen powerup bugs fixed across four commits this session, all with
-  regression tests in `godot-project/tests/test_abilities.gd` (265 checks).
+- Twenty-one powerup bugs fixed across six commits this session, all with
+  regression tests in `godot-project/tests/test_abilities.gd` (264 checks).
   `tools/verify.sh` green.
 - The gloves, kick and the action button are **live-confirmed working** as of
-  this session. Everything in `0a06b1a`, `7e574d2` and `4a4fed8` is not.
+  this session. Everything from `0a06b1a` onward is not.
+- The punched/thrown bomb model now matches the disc: a three-cell first hop
+  at the tall arc, one-cell bounces at the small arc for thrown bombs as well
+  as punched ones, no fuze advance while airborne, a per-bomb cell counter
+  holding a jelly bomb straight for three cells, and the arena wrapping for
+  anything in the air.
 - Three powerup rules now come from BM95.EXE rather than inference, each
   commented with its address: the kick gate (`0x41EE51`), re-kicking a rolling
   bomb (`0x42464B`), and the jelly quarter turn (`0x423A1E`). `tools/bmexe.py`
@@ -31,20 +37,15 @@ has been seen by a human yet.
 
 ## In flight
 
-- `godot-project/scripts/sim/sim.gd` `_fly_bomb()` — the hop model is now
-  mostly matched: one tall hop over three cells (VALUELST 660, "initial
-  three-space punch bounces") then one-cell hops at the small arc (661,
-  "subsequent small 1-space punch bounces"), for thrown bombs as well as
-  punched ones, ending when the fuze does. **What is still missing** is the
-  per-bomb hop counter BM95.EXE keeps at struct offset `+0x48`: it gates the
-  jelly crazy turn at `0x423991`, so in the original a punched JELLY bomb's
-  first three cells are straight and only the one-cell bouncing afterwards can
-  wander. This port lets a jelly bomb turn from the first intersection.
-- `godot-project/scripts/sim/sim.gd` `_landing_cell()` — still precomputes a
-  landing rather than resolving each hop as it arrives, which is why the
-  overlap, arena-edge and "nowhere to go" cases each needed their own patch
-  where the original needs none. Working, but three patches for one model.
-  Addresses in `docs/POWERUP_REVIEW_PLAN.md`.
+- `godot-project/scripts/sim/sim.gd` `_landing_cell()` — the last structural
+  difference, and now a cosmetic one rather than a behavioural one: this port
+  precomputes a landing cell and interpolates to it, where BM95.EXE resolves
+  each hop as it arrives. The observable rules all match now (three-cell first
+  hop, one-cell bounces after, no fuze in the air, the +0x48 cell counter, the
+  wrap), so this is worth doing only if a future bug traces back to it. It is
+  why the overlap, arena-edge and "nowhere to go" cases each needed their own
+  patch where the original needs none. Addresses in
+  `docs/POWERUP_REVIEW_PLAN.md`.
 - `godot-project/scripts/sim/sim.gd` `_explain_action()` — temporary
   scaffolding behind `AB_DEBUG_ACTIONS=1`. Delete it once the on-screen action
   history (step 3 of `docs/POWERUP_TEST_RANGE_PLAN.md`) exists.
@@ -67,6 +68,14 @@ exactly like a real regression and is not one.
 
 ## Open questions
 
+- `win/Atomic Bomberman - CDRIP/` carries the PRINTED MANUAL as a PDF, which
+  `MANUAL.BM` is only a text subset of. `pdftotext` gets usable (OCR-noisy)
+  text; the powerup descriptions are around lines 285-400. It is the source
+  that settled the airborne-fuze rule and independently confirmed the kick
+  rule ("walk into any UNOBSTRUCTED bomb"). Its BM95.EXE, VALUELST, SOUNDLST
+  and MANUAL.BM are all identical to `original-game/`; it adds one scheme,
+  `DOUG.SCH`. **Check the PDF before inferring a mechanic** — it is the most
+  detailed prose source available.
 - `win/Bomberman/` is a SECOND INSTALL of the same game, not source. Its
   `bombeman.EXE` has the same MD5 as `original-game/BM95.EXE`
   (`380baabe114af0596d860477d976a4c7`), and VALUELST.RES and the manual are
@@ -99,6 +108,10 @@ exactly like a real regression and is not one.
   The ramp measured 40/255 mean across the sprite and read live as "doesn't
   blink"; leaving green at 1.0 made it invisible on the green player. A square
   wave with all three channels dimmed measures 48/255 mean, 138/255 worst.
+- **Do not make a bomb's fuze run while it is in the air.** BM95.EXE
+  `0x423F02` skips the timer for the punched and bouncing states, and the PDF
+  manual says it plainly of The Hand: "The bomb is not active until it hits
+  the ground." Bouncing is ended by running into something, never by the fuze.
 - **Do not "fix" a punch into a wall by refusing it.** MANUAL.BM: "Throw and
   punch your bombs over the wall to destroy your opponents." A punch refuses
   only when the whole line, wrapped, has no free cell.
