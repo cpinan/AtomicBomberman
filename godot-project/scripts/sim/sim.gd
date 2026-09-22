@@ -902,6 +902,20 @@ func _tick_bombs() -> void:
 		# up its not even ticking (starts ticking when it falls)".
 		if b.carried_by >= 0:
 			continue
+		# NOR DOES A BOMB IN THE AIR TICK — BM95.EXE 0x423F02 skips the timer
+		# advance outright for a bomb whose state is 2 or 3, the punched and
+		# bouncing states, and only the comparison against the limit runs for
+		# those. The printed manual says the same thing from the player's
+		# side, of The Hand: "Don't worry about the bomb going off in your
+		# hands. The bomb is not active until it hits the ground."
+		#
+		# So bouncing is ended by running into something, never by the fuze.
+		# An earlier pass here had the fuze burning through a flight in order
+		# to stop a bomb bouncing for ever; the arena's own solid border does
+		# that instead, since a bounce is refused into a blocked cell and the
+		# border is blocked even after the wrap.
+		if b.flying:
+			continue
 		# A TRIGGER bomb waits for its owner's signal instead of burning down.
 		# If the owner dies it reverts to an ordinary bomb, or it would sit on
 		# the field for the rest of the round with nobody able to fire it —
@@ -1837,9 +1851,12 @@ func _fly_bomb(b: Bomb_) -> void:
 	# thrown bomb does this too; it used to be given no bounces at all and
 	# simply stopped dead where it landed.
 	#
-	# No bounce count any more: the fuze is what ends it, now that a bounce no
-	# longer resets it. The landing cell is wrapped for the same reason the
-	# flight is — a bomb bouncing along is still travelling over the arena
+	# No bounce count any more: running into something is what ends it. A
+	# bomb in the air does not tick at all (see _tick_bombs), so the fuze
+	# cannot be what stops it, and the arena's solid border always can — a
+	# bounce is refused into a blocked cell, and the border stays blocked
+	# after the wrap. The landing cell is wrapped for the same reason the
+	# flight is: a bomb bouncing along is still travelling over the arena
 	# wall, not into it.
 	if b.move_dir != Types_.Dir.NONE:
 		var step: Vector2i = Types_.DIR_VEC[b.move_dir]

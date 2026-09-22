@@ -1374,20 +1374,28 @@ func _test_a_throw_at_the_edge_wraps(t: T_) -> void:
 	# It bounces on until it settles or its fuze ends it, so follow it and
 	# keep the last live position rather than waiting for a landing that an
 	# open row never produces.
+	# Track the WHOLE path, not just where it ends: the proof of a wrap is
+	# that the bomb — thrown rightwards from near the right-hand wall — is
+	# seen somewhere to the LEFT of the thrower, which it can only reach by
+	# leaving the arena on one side and re-entering on the other. Where it
+	# finally settles depends on what it bounces into afterwards.
 	var last := Vector2i(b.tile_x(), b.tile_y())
-	for _i in 120:
+	var leftmost := b.tile_x()
+	for _i in 200:
 		sim.tick()
 		if b.detonated:
 			break
 		last = Vector2i(b.tile_x(), b.tile_y())
+		leftmost = mini(leftmost, last.x)
 		if not b.flying and b.move_dir == Types_.Dir.NONE:
 			break
 	t.ok(last.x != edge or last.y != 5,
 		"it does not stay at the thrower's feet")
 	t.ok(Field_.in_bounds(last.x, last.y),
 		"and stays inside the arena (%d,%d)" % [last.x, last.y])
-	t.ok(last.x < edge,
-		"having wrapped round to the far side rather than stopping at the wall")
+	t.ok(leftmost < edge,
+		"having wrapped round to the far side (reached column %d, thrown "
+			% leftmost + "rightwards from %d)" % edge)
 
 	# The wrap helpers themselves, against the original's own thresholds.
 	t.eq(Sim_._wrap_tx(Const_.FIELD_W + 2), Const_.FIELD_W + 2
@@ -1439,8 +1447,10 @@ func _test_a_grabbed_bomb_bounces_along(t: T_) -> void:
 		"a thrown bomb bounces on past its first landing (reached %d, first "
 			% furthest + "landing is tile 5)")
 
-	# THE FUZE is what ends it now, not a bounce counter — a hop must not
-	# re-arm the timer the way the initial throw does.
+	# THE FUZE DOES NOT RUN IN THE AIR — BM95.EXE 0x423F02 skips the timer
+	# advance for a bomb in the punched or bouncing state, and the printed
+	# manual says it of The Hand: "The bomb is not active until it hits the
+	# ground." So a hop must neither re-arm the timer nor burn it.
 	var s2 := _sim(1)
 	var p2: Player_ = s2.players[0]
 	p2.place_at_tile_centre(2, 5)
@@ -1452,15 +1462,18 @@ func _test_a_grabbed_bomb_bounces_along(t: T_) -> void:
 	var fuze_at_launch := b2.fuze
 	for _i in 12:
 		s2.tick()
-	t.ok(b2.fuze < fuze_at_launch,
-		"the fuze keeps running down while it bounces (%d -> %d)"
-			% [fuze_at_launch, b2.fuze])
-	# And it does go off rather than bouncing for ever.
-	for _i in 200:
+		if not b2.flying:
+			break
+	t.eq(b2.fuze, fuze_at_launch,
+		"the fuze does not move while the bomb is in the air")
+
+	# It is running into something that ends the bouncing, and once the bomb
+	# is down again its fuze resumes and it goes off.
+	for _i in 400:
 		s2.tick()
 		if b2.detonated:
 			break
-	t.ok(b2.detonated, "a bouncing bomb still detonates on its own fuze")
+	t.ok(b2.detonated, "it comes to rest and then detonates")
 
 
 ## A JELLY BOMB RUNS ITS FIRST THREE CELLS STRAIGHT — BM95.EXE 0x423991:
