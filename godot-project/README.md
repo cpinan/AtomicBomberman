@@ -29,26 +29,28 @@ arguments to the game rather than eating them itself:
 godot --path . -- --players 2 --bots 4
 ```
 
-Without the separator the flag is silently ignored and you get the default.
+Without the separator Godot keeps the flag for itself; the game still finds
+its own flags there, but warns you to move them after the `--`.
 Useful ones (see `scripts/app/main.gd`'s header comment for the full list):
 `--scheme PATH` to load a specific `.SCH` file, `--players N`, `--bots N`,
 `--scale N`, `--debug-grid`, `--auto-bomb N` (force a bomb on tick N, for
 scripted screenshots).
 
-Playing with other people — two on one keyboard, or two windows over the
-network on one machine — is `../docs/MULTIPLAYER.md`.
+Playing with other people — from the menu with no flags, two on one
+keyboard, or two windows over the network on one machine — is
+`../docs/MULTIPLAYER.md`.
 
 ## Testing
 
 ```bash
-./verify.sh                  # 37 suites, ~6100 checks, parses all 74 .gd files
+./verify.sh                  # 39 suites, ~6500 checks, parses every .gd file
 EXPORT=1 ./verify.sh          # plus both export presets, .pck probed
 ../tools/mutate.py            # mutation testing (run from here)
 ```
 
-Never run two Godot processes against this project at once — headless test
-runs and a live window both hit the same LAN discovery port and can corrupt
-each other's results. Kill stray processes first: `pgrep -fl Godot`.
+Close every game window first — a live window holds the LAN discovery port,
+and `verify.sh` stops with a message naming its process rather than failing
+in a way that looks like a regression. Find strays with `pgrep -fl Godot`.
 
 ## The T test editor
 
@@ -60,12 +62,20 @@ the keystroke before the game ever saw it.)
 - **Left click** a cell — cycles solid → brick → blank
 - **Right click** a cell — drops the selected powerup there, immediately
   visible (no brick to break first)
-- **[ / ]** — choose which of the 13 powerup types RMB places
+- **N** / **shift-N** (or **[ / ]**) — choose which of the 13 powerup types
+  RMB places and G gives
+- **G** — give the selected powerup to the player on the cursor
+- **X** — strip that player back to newborn: no powerups, no diseases
 - **B** — spawn a bomb at the cursor, using slot 0's own flame length/jelly
 - **K** — kill the player standing on the cursor cell (or slot 0)
 - **D** — give that player a random ordinary disease
 - **C** — cure that player
 - **R** — clear every brick and powerup on the field
+- **P** — pause the clock, **.** — one tick while paused (local games only)
+
+In a network game the editor works on the **host**, and edits the real game
+— every window sees the change. A guest's edits, and `P` anywhere online,
+are refused with a message on the panel.
 
 Pair it with `test_data/TESTALL.SCH` (`--scheme test_data/TESTALL.SCH`) — a
 hand-authored scheme with a sparse pillar grid (mostly destructible brick,

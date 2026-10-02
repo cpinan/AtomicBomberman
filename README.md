@@ -23,16 +23,30 @@ rendering the same screen, live.
 | ![original field background](docs/screenshots/original-field0-greenacres.png) | ![port gameplay](docs/screenshots/port-gameplay-greenacres.png) |
 
 The gameplay shot on the right is real, not staged for the screenshot: five
-players, two simultaneous bomb explosions, and the brick/powerup/wall art
+players, four simultaneous bomb explosions, and the brick/powerup/wall art
 all drawn from the original's own sprite sheets.
+
+### Network play, from the menu
+
+| Hosting: the lobby tells you what to read out | Joining: pick a listed game, or type the address |
+|---|---|
+| ![host lobby](docs/screenshots/port-network-lobby.png) | ![join by address](docs/screenshots/port-network-join.png) |
+
+No command line needed. **Start Network Game** opens a lobby that shows the
+address others need; **Join Network Game** lists games heard on the LAN and
+takes a typed address for anything else. When a match is won everyone
+returns to the lobby, and the host starts the next one. Step-by-step, and
+what every on-screen message means: [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md).
 
 ## What actually works
 
 - The game **starts, plays, and finishes** entirely on the original's own
   screens, art, sounds, and level data.
-- **Full network play** — WebSocket server/client, tested with real
-  multi-client sessions, deterministic simulation kept in sync by an FNV-1a
-  state hash every tick.
+- **Full network play, started from the menu** — host and join without a
+  terminal, play match after match from the lobby, rejoin a dropped game
+  into your own seat. WebSocket server/client, server-authoritative,
+  checked by an FNV-1a state hash every tick, and a test that fails if the
+  view ever reads a field the network does not carry.
 - **Every one of the 67 shipped multiplayer schemes** loads and plays, with
   team splits, player-start stacking, and per-scheme powerup overrides all
   read from the scheme file itself.
@@ -70,8 +84,8 @@ Nothing here is invented where the disc has an answer. The pipeline:
    integer-only — centipixels, no floats anywhere in game logic — so a
    client and server computing the same inputs get bit-identical results,
    checked every tick by the state hash.
-5. **`tools/verify.sh`** is the single gate: 37 headless test suites, ~6,100
-   assertions, a parse pass over all 74 `.gd` files whether referenced or
+5. **`tools/verify.sh`** is the single gate: 39 test suites, ~6,500
+   assertions, a parse pass over every `.gd` file whether referenced or
    not, a real WebSocket match between a server and two clients, and a
    mutation-testing pass (`tools/mutate.py`) that deliberately breaks the
    simulation 213 ways to confirm the test suite would actually catch each
@@ -91,70 +105,39 @@ Nothing here is invented where the disc has an answer. The pipeline:
   inflated a 30 KB file to 82 MB) and how each was caught, so a mistake
   doesn't get quietly re-made.
 
-## This session's work
+## This session's work (2026-10-02)
 
-Starting from a build that already played start-to-finish with ~6,100
-green checks, a live playtesting pass — followed by a deliberate
-port-vs-original ground-truth hunt — turned up defects the test suite
-could not see (the recurring lesson of this whole project — see
-`docs/BUGS.md`'s D21/D24/D27/D28, and now D29). All fixed and re-verified
-against the full suite:
+Network play went from "works, if you are a developer with a terminal" to
+something a player can use from the menu, and a run of defects that only
+showed up between two windows was fixed — each with a test that fails
+without the fix.
 
-**Found by playing it (D29):**
+- **The match never ended over the network.** The server logged "match
+  over" and then nothing — both windows sat on the final frame. A won match
+  now returns everyone to the lobby with the result shown, and the host
+  starts the next one.
+- **Losing the server quit everybody's game.** Now: back to the menu, with
+  the reason on screen. A join to an address where nothing answers no
+  longer hangs forever.
+- **A menu-only join could never work** — every menu-started game is named
+  "player", and the server refused the duplicate. Duplicates are numbered.
+- **Networked deaths still had no animation, and punched bombs flew
+  flat**, because two fields the renderer reads never crossed the wire.
+  Found by a new test that changes every player and bomb field on a server
+  and checks what arrives.
+- **The test editor crashed on every key in a network game.** It now edits
+  the host's real game; a guest is told why it cannot.
+- **A dropped player who rejoins gets their own seat, colour and score
+  back**, even from the AI that kept it warm.
+- **The flame's top arm sat ~3 px right of the centre** — the arm was
+  right; the centre piece's art carries its stem off-centre in its frame.
+  The vertical arms now line up on it: 2.75 px apart at the joint before,
+  0.15 px after, measured on screen.
+- **Flags typed before `--` are honoured with a warning** instead of being
+  silently ignored, and `verify.sh` refuses to run beside an open game
+  window instead of failing in a way that looks like a regression.
 
-- **Bombs sometimes not destroying bricks.** The flame-arm walk tested "is
-  there a powerup here" before "is this a brick" — and every powerup sits
-  hidden under a brick by design, so a flame hitting one destroyed the
-  invisible powerup and stopped without ever touching the brick. Swept all
-  67 schemes: **1,540 of 4,268 bomb-adjacent-to-brick cases (36%) failed
-  before the fix, 0 after.**
-- **Flame centre/north-arm misalignment** — a genuine sub-pixel quantization
-  limit (a 41px sprite centred in a 40px cell always leaves an exact 0.5px
-  remainder, provably, for any rounding rule), fixed by letting flame
-  pieces draw at their true fractional pixel position instead of snapping —
-  every other sprite kind stays pixel-locked.
-- **A powerup sitting on a bomb's own tile was never destroyed** — the
-  flame arms checked for one, the epicentre never did.
-- **Bombs could land on top of each other.** A punched or thrown bomb's
-  destination was clamped to field bounds only, with zero occupancy
-  check — fixed to stop at the furthest open cell, the way a kicked bomb
-  already did.
-- **AI movement was genuinely erratic** — the wander fallback re-rolled a
-  random direction every single tick (20/s) instead of persisting one.
-  Measured: 75% of ticks changed direction before the fix, 5% after,
-  matching the original's own 1-in-25 reconsider rule.
-- **A death animation could get cut off by the round ending underneath
-  it** — the round-transition timer (60 ticks) was shorter than the
-  longest death animation needs (up to 93 steps), so a cornered,
-  round-deciding kill could tear the simulation down mid-animation.
-
-**Found by hunting the port against the disassembled original, not by
-playing:**
-
-- **Four of twelve diseases were dead stubs** — `POOPS`, `SWAP_PLAYERS`,
-  `LEPROSY` and `INVISIBLE` were correctly classified into the disease
-  pool (so a player could catch them) but had no effect at all.
-  Implemented, cross-checked against an independent prior port where the
-  disc itself doesn't say (POOPS confirmed via a second port's own
-  `dEbola` — same disease, same mechanism).
-- **Campaign mode never scored a kill on a bot player** — VALUELST
-  resource 1300 ("250 for killing an AI") was declared and never read.
-- **The project's own "two-parser" safety check wasn't running.**
-  `tools/schemes.py --compare` — meant to catch the Python and GDScript
-  scheme parsers disagreeing — depended on a test-support script that
-  didn't exist, so it passed by checking nothing. Rebuilt; run for real:
-  all 67 schemes agree between the two parsers.
-
-Two live reports turned out to be correct behaviour, not bugs: an exposed
-powerup already died to flame (only the epicentre case was broken), and a
-"player instead of bomb" sighting during a punch/throw was the disc's own
-art — every character in this game is bomb-shaped, including a flying bomb.
-
-Every fix above was found and root-caused through actual repro — headless
-simulation sweeps across all 67 schemes, live-session playtesting, and
-pixel-level measurement of the rendered art — not by reasoning about the
-code in the abstract. See `docs/BUGS.md` D29 for the full defect history
-and `CHANGELOG.md` for the itemized diff.
+Itemized in `CHANGELOG.md`; the per-item reasoning in `docs/IMPROVEMENTS.md`.
 
 ## What's not done
 
@@ -162,11 +145,12 @@ and `CHANGELOG.md` for the itemized diff.
   replacement set (the only path to a build that could ever be
   redistributed) is designed for (`docs/ART.md`, `tools/artpack.py`) but
   not drawn.
-- Hold-to-carry bombs (the port grabs on a second press, the manual says
-  hold), three of the manual's six in-game keys (help, net-stats,
-  misc-info), death-animation sound mapping (nine sounds for 24 animations,
-  the mapping is unrecovered), decoration-only cornerhead animations, and
-  the netplay server-override key.
+- Not yet compared with the original: the between-rounds scoreboard and
+  win screen, and the level selection screen.
+- Network play has no room codes without a directory server you run
+  yourself (`directory/`); typing the host's address always works.
+- The thirteen powerups are live-verified in single-player for the gloves
+  and kick only; the rest pass their tests but await a human.
 - The AI's search is a simplification of the original's — a graded danger
   map with breadth-first search, rather than the original's cloning-walker
   frontier over a 100-node pool — a deliberate, documented approximation,
@@ -183,7 +167,7 @@ godot-project/     the Godot 4 project — the deliverable
   scripts/sim/      the simulation — integer-only, no engine deps
   scripts/net/      protocol, server, client
   scripts/render/   everything that draws
-  tests/            37 headless suites + the test harness
+  tests/            39 suites (33 headless, 6 rendered) + the harness
   test_data/        TESTALL.SCH — a scheme with every powerup guaranteed
   verify.sh         the one command that has to stay green
 tools/              the extraction toolkit — 21 Python scripts, one per
@@ -213,13 +197,14 @@ to a built-in grid — it still runs. Extract real game data first with
 
 ```bash
 cd godot-project
-./verify.sh                  # 37 suites, ~6100 checks
+./verify.sh                  # 39 suites, ~6500 checks
 EXPORT=1 ./verify.sh         # plus both export presets, .pck probed
 ../tools/mutate.py            # mutation testing
 ```
 
-Never run two Godot processes against this project at once — they share a
-LAN discovery port and will corrupt each other's test results.
+Close every game window before running it — they share the LAN discovery
+port, and `verify.sh` stops with a message naming the window's process if
+one is open.
 
 See `godot-project/README.md` for the full flag list and the T test
 editor's controls.

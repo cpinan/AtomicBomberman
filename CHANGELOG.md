@@ -1,5 +1,57 @@
 # Changelog
 
+## 2026-10-02 — network play from the menu, and the bugs between two windows
+
+**Network play**
+
+- **A won match returns everyone to the lobby** (it used to stop on the
+  final frame for good). The lobby says who won; the host presses Enter
+  for the next match. Dedicated servers do the same, with the first
+  player in the room as host.
+- **Hosting explains itself.** The host's lobby shows the LAN address,
+  how others join, and the port to forward for internet play.
+- **Joining needs no flags.** Join Network Game takes a typed address
+  (`192.168.1.20`, `host:port`) as well as a room code; the empty list says
+  so instead of naming `--join`.
+- **The LAN list works with two windows on one machine** — the second
+  window keeps trying for the discovery port and gets it once the first
+  starts hosting.
+- **Duplicate names are numbered** ("player 2") instead of refused, which
+  made every menu-only join fail.
+- **Losing the connection returns to the menu** with the reason on screen,
+  instead of quitting the game. A join nobody answers no longer hangs.
+- **Rejoining mid-match reclaims your seat**, colour and score — taking it
+  back from the AI if `lost_net_to_ai` put one there.
+- **Deaths animate and punched bombs arc on every client.** `death_tick`
+  and `fly_height` were never sent; a new suite,
+  `tests/test_snapshot_coverage.gd`, fails for any field the renderer
+  reads that a snapshot does not carry.
+- Protocol version 6 → 8, `Snapshot.LAYOUT` 3 → 4.
+
+**Fixes**
+
+- **The T editor crashed on every key in a network game.** It now edits
+  the host's server, and refuses on a guest with a message. `P` is refused
+  in network games (A2c: no manual pause online).
+- **The host's override key (`O`) crashed a lobby** with no round running.
+- **The flame's top arm sat ~3 px right of the centre** (A4). MFLAME's
+  centre frames carry their stem ~2.5 px left of the frame's middle; the
+  vertical arms now line up on it. 2.75 px at the joint before, 0.15 px
+  after.
+- **Flags given before the bare `--` are honoured with a warning** instead
+  of silently ignored.
+- The between-rounds wait holds for a death animation over the network,
+  as it already did locally.
+
+**Tooling**
+
+- `verify.sh` refuses to run while a game window holds UDP 47601, and
+  honours `PYTHON=` everywhere (two checks called `python3` directly).
+- A flaky three-client check counted living players; it counts seated
+  ones.
+
+`tools/verify.sh`: **VERIFY OK** — 39 suites, ~6,500 checks.
+
 ## 2026-09-18 — the last two known gaps
 
 The two items from the prior batch that were correctly left undone —

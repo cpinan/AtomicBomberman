@@ -1,13 +1,14 @@
 # STATUS — Atomic Bomberman (Godot 4 port)
 
-_Last updated: 2026-10-02 · branch `main` · 0 uncommitted files, 9 commits unpushed_
+_Last updated: 2026-10-02 · branch `main` · 0 uncommitted files, all pushed_
 
 ## Next action
 
-Play a real two-machine network game from the menu only (host: Start Network
-Game; guest: Join Network Game, type the address shown in the host's lobby),
-finish a match, play a second one, and walk the powerup list in
-`docs/POWERUP_REVIEW_PLAN.md` with the T editor (`docs/IMPROVEMENTS.md` A2).
+Finish the live QA pass from 2026-10-02 on two machines: joining from the
+menu was confirmed working by the user that day (two windows, one machine);
+still unseen by a human are the match-end return to the lobby, rejoining a
+dropped game, punched-bomb arcs and death animations on the guest, and the
+flame joint (A4). Then `docs/IMPROVEMENTS.md` A2, every powerup online.
 
 ## State
 
@@ -23,8 +24,8 @@ finish a match, play a second one, and walk the powerup list in
   carry it). Joiners and `P` (pause) are refused with a message.
 - `tests/test_snapshot_coverage.gd` fails for any field game_view.gd reads
   that no snapshot carries. It found `death_tick` and `fly_height` missing.
-- Nothing from 2026-10-02 has been seen by a human — every change is
-  verified by tests and by rendered screenshots only.
+- Of the 2026-10-02 work, only hosting and joining from the menu has been
+  seen by a human; the rest is verified by tests and rendered screenshots.
 
 ## In flight
 
@@ -50,7 +51,6 @@ it under `caffeinate -i`.
   `~/AtomicBomberman-sha-map-old-to-new.txt`. Checked 2026-10-02: the remote
   `main` matches the local one and no `win/` objects remain. The permission
   system blocked the agent from deleting them, so this one is for the user.
-- Push the local commits (`80a045c`..HEAD) when the live test above passes.
 - A3, the level selection screen, and B2, a held-powerups HUD strip — design
   decisions; check what the original shows first.
 - Room codes need a `--directory` server; no default one exists, so the menu
