@@ -37,6 +37,7 @@ func _init() -> void:
 	await _test_a_lobby_always_has_a_host(t)
 	await _test_a_lobby_does_not_reap_people_for_waiting(t)
 	await _test_animation_timers_reach_the_client(t)
+	await _test_a_won_match_returns_to_the_lobby(t)
 	quit(t.finish())
 
 
@@ -345,7 +346,9 @@ func _test_a_whole_match(t: T_) -> void:
 			alive += 1
 	t.eq(alive, 2, "both players are alive again in round two")
 
-	# Round two ends the match.
+	# Round two ends the match. Alice's seat is read now: once the match is
+	# won the room reopens and a client in a lobby has no seat.
+	var champ := a.slot
 	server.sim.kill(server.sim.player_by_slot(loser), a.slot)
 	for _i in 140:
 		a.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
@@ -353,21 +356,26 @@ func _test_a_whole_match(t: T_) -> void:
 		await _pump(server, [a, b])
 
 	t.ok(a.the_match.over(), "two wins take the match")
-	t.eq(a.the_match.champion_slot, a.slot, "alice is the champion")
-	t.eq(a.the_match.wins_of(a.slot), 2, "with two wins")
+	t.eq(a.the_match.champion_slot, champ, "alice is the champion")
+	t.eq(a.the_match.wins_of(champ), 2, "with two wins")
 	t.eq(a.the_match.round_index, 1,
 		"and no third round was started after it ended")
 
-	# The server keeps serving a finished match rather than closing: whoever is
-	# hosting decides what happens next, not the server.
-	var before := server.sim.tick_count
-	for _i in 60:
-		a.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
-		b.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+	# A won match goes back to the room rather than ticking a finished field
+	# forever — docs/IMPROVEMENTS.md A1, "it gets stuck at the end of the
+	# match". Even this server, which started its first match at once, has a
+	# host by now to start the next one.
+	for _i in 200:
 		await _pump(server, [a, b])
-	t.ok(server.sim.tick_count > before,
-		"the server keeps ticking with the match won")
-	t.ok(a.playing(), "and the clients stay connected")
+		if a.in_lobby() and b.in_lobby():
+			break
+	t.eq(server.state, Server_.State.WAITING,
+		"[invariant] the finished match reopens the room")
+	t.ok(a.in_lobby() and b.in_lobby(), "and both clients are back in it")
+	t.eq(server.player_count(), 2, "still connected, both of them")
+	t.eq(a.the_match.champion_slot, champ,
+		"the client still knows who won while it waits")
+	t.eq(a.sim, null, "and has dropped the finished field")
 
 	a.close()
 	b.close()
@@ -757,12 +765,17 @@ func _test_three_clients_through_the_lobby(t: T_) -> void:
 		t.ok(client.snapshots_applied() > 20,
 			"client %d applied %d snapshots" % [i, client.snapshots_applied()])
 
-	# Each of them sees the other two, not just itself.
-	var live := 0
+	# Each of them sees the other two, not just itself. SEATED, not alive:
+	# these clients drop bombs on a schedule while walking, and under a loaded
+	# verify run an input can land a tick later, the paths diverge, and
+	# somebody walks into their own blast — a death the server and every
+	# client agree on, which the hash check above has already proven. Counting
+	# the living made this flake about one full run in three.
+	var seen := 0
 	for p in a.sim.players:
-		if p.alive:
-			live += 1
-	t.ok(live >= 3, "the host sees %d live players" % live)
+		if p.in_play:
+			seen += 1
+	t.ok(seen >= 3, "the host sees %d seated players" % seen)
 
 	for client in all:
 		client.close()
@@ -1009,4 +1022,86 @@ func _test_animation_timers_reach_the_client(t: T_) -> void:
 	t.eq(seen.cornerhead_ticks, 3, "and its own frame counter")
 
 	a.close()
+	server.close()
+
+
+## A WON MATCH REOPENS THE ROOM, AND THE HOST CAN PLAY ANOTHER.
+##
+## docs/IMPROVEMENTS.md A1, live: "match over: player 0 wins the match" and
+## then nothing — no lobby, no menu, both windows on the final frame until
+## somebody killed them. The whole cycle a session of several matches takes:
+## lobby, start, a won match, back to the lobby with the roster intact, and a
+## second match that starts from nil-nil on a different seed.
+func _test_a_won_match_returns_to_the_lobby(t: T_) -> void:
+	var port := PORT + 14
+	var server: Server_ = Server_.new()
+	if not t.ok(server.listen(port, _scheme_text(), 0, 31, false, true),
+			"the server opens a lobby on %d" % port):
+		return
+	server.the_match.wins_to_win = 1
+	var a: Client_ = Client_.new()
+	var b: Client_ = Client_.new()
+	var all := [a, b]
+	a.connect_to("ws://127.0.0.1:%d" % port, "alice")
+	b.connect_to("ws://127.0.0.1:%d" % port, "bob")
+	var returned := [0]
+	a.returned_to_lobby.connect(func(): returned[0] += 1)
+	for _i in 200:
+		await _pump(server, all)
+		if a.in_lobby() and b.in_lobby():
+			break
+	if not t.ok(a.in_lobby() and b.in_lobby(), "both reach the lobby"):
+		server.close()
+		return
+	var rooms := {a: a.lobby_slot, b: b.lobby_slot}
+
+	# The host's O with no round running used to reach a null sim.
+	t.eq(server.override_next_slot(), -1,
+		"the host's override key does nothing in a lobby, and does not crash")
+
+	for match_no in 2:
+		a.request_start()
+		for _i in 300:
+			a.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+			b.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+			await _pump(server, all)
+			if server.ready_count() == 2 and a.playing() and b.playing():
+				break
+		if not t.ok(server.ready_count() == 2,
+				"match %d: the host's start seats both" % (match_no + 1)):
+			server.close()
+			return
+		t.eq(a.the_match.round_index, 0,
+			"match %d starts on round one" % (match_no + 1))
+		t.eq(a.the_match.wins_of(a.slot), 0,
+			"match %d starts from nil" % (match_no + 1))
+		t.ok(not a.the_match.over(),
+			"match %d is not over before it is played" % (match_no + 1))
+		t.eq(a.slot, rooms[a], "alice keeps her slot across matches")
+		t.eq(b.slot, rooms[b], "and so does bob")
+
+		var seed_played := server.the_match.round_seed
+		server.sim.kill(server.sim.player_by_slot(b.slot), a.slot)
+		for _i in 400:
+			a.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+			b.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+			await _pump(server, all)
+			if a.in_lobby() and b.in_lobby():
+				break
+		t.ok(a.in_lobby() and b.in_lobby(),
+			"match %d: a won match puts both back in the lobby" % (match_no + 1))
+		t.eq(server.state, Server_.State.WAITING,
+			"[invariant] match %d: the server reopened the room" % (match_no + 1))
+		t.eq(server.sim, null, "and holds no finished field")
+		t.eq(returned[0], match_no + 1, "the client said so exactly once")
+		t.eq(a.the_match.champion_slot, rooms[a],
+			"alice is still shown as the winner while they wait")
+		t.eq(a.lobby_roster.size(), 2, "the roster survived the match")
+		t.ok(a.lobby_is_host and not b.lobby_is_host,
+			"and so did who hosts it")
+		t.ok(server.the_match.round_seed != seed_played,
+			"the next match will be on a different seed")
+
+	for client in all:
+		client.close()
 	server.close()

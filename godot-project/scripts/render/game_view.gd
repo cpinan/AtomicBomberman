@@ -43,6 +43,9 @@ var show_grid: bool = false
 var editor_active: bool = false
 var editor_cursor: Vector2i = Vector2i(-1, -1)
 var editor_powerup: int = 0
+## Why the last editor key did nothing, or empty. main.gd sets it; drawn as
+## the panel's last line so a refused key is never silent.
+var editor_notice: String = ""
 
 ## Types.PowerUp's thirteen values in order — the same list POWERUP_SEQ below
 ## uses for its art sequence names, reused here for the legend's plain names.
@@ -1231,6 +1234,8 @@ func _draw_test_editor() -> void:
 			+ "R clear  P pause  . step",
 		_editor_player_state(),
 	]
+	if not editor_notice.is_empty():
+		lines.append(editor_notice)
 	# ALONG THE BOTTOM, not the top: the status band at the top carries the
 	# clock and the score, and a panel drawn over y=0 sat right on the timer.
 	# The foot of the screen is the one strip the playfield does not use —

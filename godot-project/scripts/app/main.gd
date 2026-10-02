@@ -820,6 +820,7 @@ func _start_from_args(args: Dictionary, ready_scheme: Scheme_ = null) -> void:
 	if client != null:
 		client.sound.connect(_on_client_sound)
 		client.slot_overridden.connect(_on_slot_overridden)
+		client.returned_to_lobby.connect(_on_client_returned_to_lobby)
 
 	if mode != Mode.DEDICATED:
 		view = GameView.new()
@@ -1082,6 +1083,9 @@ func _process(delta: float) -> void:
 		server.poll(delta * 1000.0)
 	if client != null:
 		_poll_client(delta)
+		# A lost connection tears the game down from inside _poll_client().
+		if client == null:
+			return
 		# The screenshot path has to run in client mode too. It did not at
 		# first, because this returned before reaching it — so --shot on a
 		# joining client never fired and the process never quit, which looks
@@ -1181,12 +1185,13 @@ func _poll_client(delta: float) -> void:
 	client.poll()
 	if not client.playing():
 		if client.state == Client_.State.REFUSED:
-			push_error("refused: %s" % client.reject_reason)
-			_quit(3)
+			print("main: refused: %s" % client.reject_reason)
+			_leave_network("Could not join: %s" % client.reject_reason, 3)
 			return
 		if client.state == Client_.State.CLOSED:
 			print("main: the server closed the connection")
-			_quit(0)
+			_leave_network("The host ended the game" if mode == Mode.JOIN
+				else "The game's server stopped", 0)
 			return
 		if view != null:
 			view.lobby_active = client.in_lobby()
@@ -1252,6 +1257,23 @@ func _poll_client(delta: float) -> void:
 		view.snapshot()
 		view.alpha = 1.0
 		view.queue_redraw_all()
+
+
+## A network game ended under us — refused, or the connection closed. It used
+## to EXIT the program: the host quits, or their network drops, and every
+## other player's window simply vanished, with the reason printed to a console
+## nobody playing is looking at. Now it goes back to the main menu and says
+## why on screen, the same line any other refusal uses.
+##
+## A scripted run (--shot, --quit-tick) still exits with `code`: nobody is
+## there to read a menu, and the exit code is the only report it has.
+func _leave_network(why: String, code: int) -> void:
+	if not _shot_path.is_empty() or _quit_tick >= 0:
+		_quit(code)
+		return
+	_open_menu(Screens_.Screen.MAIN_MENU)
+	if screens != null:
+		screens.refusal = why
 
 
 func _step() -> void:
@@ -1622,6 +1644,38 @@ func _on_client_round_started(_round_index: int, _level: int) -> void:
 		sfx.new_round()
 
 
+## The match was won and the server reopened the room. The view drops the
+## finished field (it draws the lobby only without one) and says who won, so
+## the result is not lost the moment the field is.
+func _on_client_returned_to_lobby() -> void:
+	if music != null:
+		music.stop()
+	if sfx != null:
+		sfx.stop_all()
+	if view == null:
+		return
+	view.sim = null
+	view.lobby_notice = _match_result_line(client.the_match, client.lobby_roster)
+	# Counted down once per frame by _poll_client(): this is meant to stay up
+	# until the host starts the next match, not blink past.
+	view.lobby_notice_ticks = 1 << 30
+	view.queue_redraw_all()
+
+
+## "alice wins the match", by name where the roster has one. The slot a
+## player held in the round is the slot they hold in the room — server.gd
+## welcomes each peer into its lobby slot — so the roster can name it.
+static func _match_result_line(m: Match_, roster: Array) -> String:
+	if m == null or not m.over():
+		return ""
+	if m.team_play and m.champion_team >= 0:
+		return "Team %d wins the match" % (m.champion_team + 1)
+	for entry in roster:
+		if int(entry["slot"]) == m.champion_slot:
+			return "%s wins the match" % String(entry["name"])
+	return "Player %d wins the match" % (m.champion_slot + 1)
+
+
 ## Screen pixels to a field cell, inverting Const_.tile_origin(). Out of
 ## bounds comes back as a cell that fails Field_.in_bounds(), which every
 ## caller checks before acting on it.
@@ -1631,32 +1685,64 @@ func _editor_tile_at(screen_pos: Vector2) -> Vector2i:
 		int(floor((screen_pos.y - Const_.FIELD_Y_OFF) / Const_.BLOCK_H)))
 
 
+## The simulation the test editor may change: the one whose state everybody
+## sees. LOCAL edits its own; a HOST edits its SERVER's, and the next snapshot
+## carries the change to every window. A JOINing client's sim is a copy the
+## next snapshot overwrites, so it gets nothing — and every editor function
+## used to reach for `sim`, which is null in both network modes, and crash.
+func _editor_sim() -> Sim_:
+	if mode == Mode.LOCAL:
+		return sim
+	if mode == Mode.HOST and server != null:
+		return server.sim
+	return null
+
+
+## Say why an editor key did nothing, on the editor panel itself — a refusal
+## that is silent reads as a broken key (docs/IMPROVEMENTS.md B1).
+func _editor_refuse(keycode: int) -> void:
+	if view == null:
+		return
+	if keycode == KEY_P or keycode == KEY_PERIOD:
+		# docs/IMPROVEMENTS.md A2c. The server is the clock in a network
+		# game; pausing this window's loop froze one view while the match ran
+		# on without it. The server's own sync pause is the only one there is.
+		view.editor_notice = "No pause in a network game"
+	elif mode == Mode.JOIN:
+		view.editor_notice = "Only the host can edit a network game"
+	else:
+		view.editor_notice = "Nothing to edit until the round starts"
+
+
 ## SOLID -> BRICK -> BLANK -> SOLID. Bypasses give_powerup entirely — this is
 ## for shaping the field itself, not for testing a pickup.
 func _editor_cycle_brick(tile: Vector2i) -> void:
+	var es := _editor_sim()
 	var i := Field_.idx(tile.x, tile.y)
-	var next: int = (int(sim.field.brick[i]) + 1) % 3
-	sim.field.brick[i] = next
+	var next: int = (int(es.field.brick[i]) + 1) % 3
+	es.field.brick[i] = next
 	if next != Types_.Brick.BLANK:
-		sim.field.powerup[i] = Field_.NO_POWERUP
+		es.field.powerup[i] = Field_.NO_POWERUP
 
 
 ## Drops the selected type straight onto the field, visible immediately — no
 ## brick to break first, which is the point: it is for testing what the
 ## powerup DOES, not for testing how it is uncovered.
 func _editor_place_powerup(tile: Vector2i) -> void:
+	var es := _editor_sim()
 	var i := Field_.idx(tile.x, tile.y)
-	sim.field.brick[i] = Types_.Brick.BLANK
-	sim.field.powerup[i] = view.editor_powerup
+	es.field.brick[i] = Types_.Brick.BLANK
+	es.field.powerup[i] = view.editor_powerup
 
 
 ## A bomb with slot 0's own flame length and jelly flag, fused normally so it
 ## detonates on its own — the fastest way to see one arm pattern without
 ## needing a live player to place it.
 func _editor_spawn_bomb(tile: Vector2i) -> void:
-	if sim.bomb_at(tile.x, tile.y) != null:
+	var es := _editor_sim()
+	if es.bomb_at(tile.x, tile.y) != null:
 		return
-	var owner: Player_ = sim.player_by_slot(0)
+	var owner: Player_ = es.player_by_slot(0)
 	var b := Bomb_.new()
 	b.x = tile.x * Const_.BLOCK_W * 100 + Const_.BLOCK_W * 50
 	b.y = tile.y * Const_.BLOCK_H * 100 + Const_.BLOCK_H * 50
@@ -1664,21 +1750,24 @@ func _editor_spawn_bomb(tile: Vector2i) -> void:
 	b.chain_owner = b.owner
 	b.flame_len = owner.flame_len if owner != null else 1
 	b.jelly_bounce = owner.jelly_bombs if owner != null else false
-	b.fuze = sim.fuze_ticks()
-	b.placed_tick = sim.tick_count
-	sim.bombs.append(b)
+	b.fuze = es.fuze_ticks()
+	b.placed_tick = es.tick_count
+	es.bombs.append(b)
 
 
 ## The player standing on `tile`, or slot 0 if nobody is — K/D/C need a
 ## target and the field is usually emptier than the roster.
 func _editor_target(tile: Vector2i) -> Player_:
-	for p in sim.players:
+	var es := _editor_sim()
+	for p in es.players:
 		if p.in_play and p.tile_x() == tile.x and p.tile_y() == tile.y:
 			return p
-	return sim.player_by_slot(0)
+	return es.player_by_slot(0)
 
 
 func _editor_key(keycode: int, shift: bool = false) -> void:
+	var es := _editor_sim()
+	view.editor_notice = ""
 	match keycode:
 		KEY_N:
 			# WHICH POWERUP the editor places and gives. N alone steps
@@ -1694,24 +1783,28 @@ func _editor_key(keycode: int, shift: bool = false) -> void:
 		KEY_BRACKETRIGHT:
 			view.editor_powerup = posmod(view.editor_powerup + 1,
 				Const_.POWERUP_COUNT)
+		KEY_B, KEY_K, KEY_D, KEY_C, KEY_R, KEY_G, KEY_X, KEY_P, KEY_PERIOD \
+				when es == null or (mode != Mode.LOCAL
+					and (keycode == KEY_P or keycode == KEY_PERIOD)):
+			_editor_refuse(keycode)
 		KEY_B:
 			if Field_.in_bounds(view.editor_cursor.x, view.editor_cursor.y):
 				_editor_spawn_bomb(view.editor_cursor)
 		KEY_K:
 			var target := _editor_target(view.editor_cursor)
 			if target != null and target.alive and not target.dying:
-				sim.kill(target)
+				es.kill(target)
 		KEY_D:
 			var target := _editor_target(view.editor_cursor)
 			if target != null:
-				sim.give_powerup(target, Types_.PowerUp.DISEASE)
+				es.give_powerup(target, Types_.PowerUp.DISEASE)
 		KEY_C:
 			var target := _editor_target(view.editor_cursor)
 			if target != null:
-				sim.cure_all(target)
+				es.cure_all(target)
 		KEY_R:
-			sim.field.brick.fill(Types_.Brick.BLANK)
-			sim.field.powerup.fill(Field_.NO_POWERUP)
+			es.field.brick.fill(Types_.Brick.BLANK)
+			es.field.powerup.fill(Field_.NO_POWERUP)
 		KEY_G:
 			# GIVE the selected powerup straight to the player, with no pickup
 			# to walk over. Walking over one runs give_powerup()'s exclusivity
@@ -1721,7 +1814,7 @@ func _editor_key(keycode: int, shift: bool = false) -> void:
 			# others". Pair with X below.
 			var give_to := _editor_target(view.editor_cursor)
 			if give_to != null:
-				sim.give_powerup(give_to, view.editor_powerup)
+				es.give_powerup(give_to, view.editor_powerup)
 		KEY_X:
 			# STRIP the player back to newborn: no powerups, no diseases.
 			# recompute_powers() owns the derivation of can_kick/can_punch/
@@ -1732,8 +1825,8 @@ func _editor_key(keycode: int, shift: bool = false) -> void:
 			if strip != null:
 				for which in Const_.POWERUP_COUNT:
 					strip.collected[which] = 0
-				sim.cure_all(strip)
-				sim.recompute_powers(strip)
+				es.cure_all(strip)
+				es.recompute_powers(strip)
 		KEY_P:
 			_editor_paused = not _editor_paused
 		KEY_PERIOD:
@@ -1856,7 +1949,7 @@ func _input(event: InputEvent) -> void:
 					server.override_next_slot()
 		if view != null and view.editor_active:
 			_editor_key(pressed.keycode, pressed.shift_pressed)
-	if view != null and view.editor_active and sim != null:
+	if view != null and view.editor_active:
 		if event is InputEventMouseMotion:
 			view.editor_cursor = _editor_tile_at(
 				(event as InputEventMouseMotion).position)
@@ -1864,7 +1957,9 @@ func _input(event: InputEvent) -> void:
 				and (event as InputEventMouseButton).pressed:
 			var click := event as InputEventMouseButton
 			var tile := _editor_tile_at(click.position)
-			if Field_.in_bounds(tile.x, tile.y):
+			if _editor_sim() == null:
+				_editor_refuse(KEY_NONE)
+			elif Field_.in_bounds(tile.x, tile.y):
 				if click.button_index == MOUSE_BUTTON_LEFT:
 					_editor_cycle_brick(tile)
 				elif click.button_index == MOUSE_BUTTON_RIGHT:

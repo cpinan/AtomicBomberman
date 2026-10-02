@@ -132,6 +132,15 @@ var _log: Array[String] = []
 ## advance the intermission.
 var _intermission: int = -1
 
+## Ticks since the match was won, or -1. The winning round's field stays up
+## for the same wait as an intermission, and then the room goes back to the
+## lobby. See _back_to_lobby().
+var _match_over_hold: int = -1
+
+## The level the room was opened on, so the next match starts where the first
+## one did rather than wherever Random Each Game left the last round.
+var _start_level: int = 0
+
 ## The bot slots to re-fill when a round restarts. sim is rebuilt per round, so
 ## without this the bots would vanish after the first one.
 var _bots: Array[int] = []
@@ -150,6 +159,7 @@ func listen(on_port: int, scheme_source: String, on_level: int = 0,
 		_note("scheme rejected: %s" % scheme.error())
 		return false
 	level = on_level
+	_start_level = on_level
 	round_seed = seed_value
 	team_play = teams
 	the_match = Match_.new()
@@ -193,6 +203,7 @@ func _start_round() -> void:
 	sim.stats = stats
 	sim.team_play = team_play
 	_intermission = -1
+	_match_over_hold = -1
 	round_seed = the_match.round_seed
 	# The level decides the specials, and the client is told it in its welcome
 	# so both sides build the same geometry without it ever being sent.
@@ -288,6 +299,11 @@ func poll(delta_ms: float) -> int:
 		_accum_ms -= float(Const_.TICK_MS)
 		_tick()
 		ran += 1
+		# A tick can end the match and close the round: there is no sim left
+		# to tick, and the rest of this budget belongs to nobody.
+		if state == State.WAITING:
+			_accum_ms = 0.0
+			break
 	return ran
 
 
@@ -314,20 +330,72 @@ func _tick() -> void:
 			match_finished.emit(the_match.champion_slot,
 				the_match.champion_team)
 			_note("match over: %s" % the_match.summary())
+			_match_over_hold = 0
 		else:
 			_intermission = 0
 
 	# Between rounds. Everyone sees who won for resource 13's three seconds,
-	# then the next round takes the field. A finished match stays finished:
-	# starting another one is a decision for whoever is hosting, not something
-	# the server does behind their back.
+	# then the next round takes the field. Held on anyone_dying() as well, the
+	# way main.gd's local match is: the round-deciding death is the one
+	# everybody is watching, and resource 13 is a minimum, not a deadline.
 	if _intermission >= 0:
 		_intermission += 1
-		if _intermission >= Match_.intermission_ticks():
+		if _intermission >= Match_.intermission_ticks() \
+				and not sim.anyone_dying():
 			the_match.next_round()
 			_note("round %d starting, seed %d"
 				% [the_match.round_index + 1, the_match.round_seed])
 			_start_round()
+
+	# A WON MATCH GOES BACK TO THE ROOM. It used to stop here: the server
+	# logged "match over" and kept ticking a finished field forever, with no
+	# lobby, no menu and nothing any player could press — reported live as "it
+	# gets stuck at the end of the match". Starting another match is still the
+	# host's decision, not the server's, so this does not start one; it puts
+	# everybody back where that decision is made.
+	if _match_over_hold >= 0:
+		_match_over_hold += 1
+		if _match_over_hold >= Match_.intermission_ticks() \
+				and not sim.anyone_dying():
+			_back_to_lobby()
+
+
+## End a won match: the room reopens with everyone still in it, and the host
+## can start the next match from there.
+##
+## Every server does this, a dedicated one included. A dedicated server
+## starts its FIRST match at once because nobody is there to press Start, but
+## by the end of a match somebody is — `_ensure_host()` names the first peer —
+## and an empty room simply waits for its next arrival to host it.
+##
+## The roster survives intact, slots included, so nobody changes colour
+## between matches. Each peer has to C_READY again after the next S_WELCOME,
+## exactly as it did the first time.
+func _back_to_lobby() -> void:
+	var champion := the_match.summary()
+	# A new seed, advanced from the last one rather than reused, so the next
+	# match is not a replay of this one but the whole session still replays
+	# from the seed the room was opened with.
+	the_match.setup(Match_._advance(the_match.round_seed), _start_level,
+		team_play, the_match.wins_to_win)
+	round_seed = the_match.round_seed
+	level = the_match.level
+	sim = null
+	state = State.WAITING
+	_intermission = -1
+	_match_over_hold = -1
+	_accum_ms = 0.0
+	if paused:
+		paused = false
+		_broadcast(Protocol_.pause(false))
+	for id in peers:
+		var seat: Dictionary = peers[id]
+		seat["ready"] = false
+		seat["silent_ms"] = 0.0
+		seat["last_tick"] = 0
+	_ensure_host()
+	_broadcast_lobby()
+	_note("%s — back to the lobby with %d player(s)" % [champion, peers.size()])
 
 
 ## Drop anyone who has gone quiet for too long. Joining is handled by the
@@ -719,7 +787,9 @@ func add_bot_slots(which: Array) -> void:
 ## Returns true if the slot actually changed. A slot with no peer and no bot
 ## on it has nothing to override.
 func override_slot(slot: int) -> bool:
-	if slot < 0 or slot >= Const_.PLAYER_COUNT:
+	# No round, no seats to override: the host's O in a lobby used to reach
+	# sim.is_bot() on a null sim.
+	if sim == null or slot < 0 or slot >= Const_.PLAYER_COUNT:
 		return false
 	# is_bot() FIRST. A demoted peer's own record in `peers` is left alone —
 	# see the note above on why — so it is still there and would look like
@@ -767,6 +837,8 @@ func override_slot(slot: int) -> bool:
 ## to override. Returns the slot changed, or -1 if every slot is already
 ## empty and not a bot.
 func override_next_slot() -> int:
+	if sim == null:
+		return -1
 	for slot in Const_.PLAYER_COUNT:
 		if _peer_id_for_slot(slot) >= 0 or sim.is_bot(slot):
 			override_slot(slot)

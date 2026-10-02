@@ -55,7 +55,10 @@ const Const_ := preload("res://scripts/core/const.gd")
 ## ticks a simulation, so anything game_view.gd gates an animation on has to
 ## arrive in the snapshot; without these a networked player died, kicked and
 ## punched with no animation at all. Snapshot.LAYOUT moves alongside this.
-const VERSION := 6
+## 6 -> 7: S_LOBBY may follow S_WELCOME. A won match reopens the room
+## (server.gd's _back_to_lobby()), and a client must leave PLAYING when told
+## so — a version-6 client ignored it and sat on the finished field forever.
+const VERSION := 7
 
 # Client -> server
 const C_HELLO := 1        ## name, protocol version

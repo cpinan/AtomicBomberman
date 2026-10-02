@@ -35,6 +35,10 @@ signal slot_overridden(slot: int, now_ai: bool)
 ## learned it's the host. Fires on every S_LOBBY, so a screen can just redraw
 ## `lobby_roster` each time rather than diffing anything itself.
 signal lobby_updated()
+## A won match is over and the server has reopened the room. `the_match` still
+## holds the result that ended it — the next S_WELCOME replaces it — so a
+## screen can say who won while everybody waits for the next one.
+signal returned_to_lobby()
 
 enum State { IDLE, CONNECTING, JOINING, WAITING, PLAYING, REFUSED, CLOSED }
 
@@ -72,11 +76,13 @@ var reject_reason: String = ""
 
 var _peer := WebSocketMultiplayerPeer.new()
 var _sent_hello: bool = false
+var _url: String = ""
 var _snapshots: int = 0
 
 
 func connect_to(url: String, player_name: String) -> bool:
 	name = player_name
+	_url = url
 	var err := _peer.create_client(url)
 	if err != OK:
 		reject_reason = "cannot connect to %s: %s" % [url, error_string(err)]
@@ -99,6 +105,13 @@ func poll() -> void:
 		if state == State.PLAYING or state == State.JOINING \
 				or state == State.WAITING:
 			state = State.CLOSED
+		elif state == State.CONNECTING:
+			# Never got as far as a socket: nothing listening, no route, a
+			# firewall. This used to sit in CONNECTING forever, which on
+			# screen is a join that silently never happens.
+			reject_reason = "nothing answered at %s" % _url
+			state = State.REFUSED
+			rejected.emit(-1, reject_reason)
 		return
 
 	if status == MultiplayerPeer.CONNECTION_CONNECTED and not _sent_hello:
@@ -120,13 +133,19 @@ func poll() -> void:
 func _handle(msg: Dictionary) -> void:
 	match msg["id"]:
 		Protocol_.S_LOBBY:
-			# Still waiting: the round has not begun. A stray S_LOBBY arriving
-			# after S_WELCOME (there shouldn't be one — the server stops
-			# sending them once it starts) would otherwise silently knock a
-			# playing client back to WAITING, so this only applies pre-start.
-			if state == State.PLAYING:
-				return
+			# Before the first round: still waiting for the host. After one:
+			# the match was won and the server has reopened the room
+			# (server.gd's _back_to_lobby()). The server only ever sends this
+			# while it is WAITING, so arriving mid-PLAYING means exactly that,
+			# and the sim goes — there is no round left for it to show, and
+			# game_view.gd draws the lobby only when it has no sim.
+			var was_playing := state == State.PLAYING
 			state = State.WAITING
+			if was_playing:
+				sim = null
+				slot = -1
+				paused = false
+				returned_to_lobby.emit()
 			lobby_slot = int(msg["your_slot"])
 			lobby_is_host = bool(msg["is_host"])
 			lobby_roster = msg["roster"]
@@ -155,6 +174,10 @@ func _handle(msg: Dictionary) -> void:
 			# that anything not yet on the wire still matches.
 			sim.setup(scheme, slots, int(msg["seed"]))
 			scheme_text = String(msg["scheme"])
+			# A fresh match, whether this is the first or one started again
+			# from the lobby. The S_MATCH right behind this fills it in; the
+			# old one still said who won the last match.
+			the_match = Match_.new()
 			state = State.PLAYING
 			welcomed.emit(slot)
 			_send(Protocol_.ready())

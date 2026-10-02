@@ -18,6 +18,8 @@ const Types_ := preload("res://scripts/core/types.gd")
 const Values_ := preload("res://scripts/core/values.gd")
 const Menu_ := preload("res://scripts/app/menu.gd")
 const Main := preload("res://scripts/app/main.gd")
+const Screens_ := preload("res://scripts/app/screens.gd")
+const Server_ := preload("res://scripts/net/server.gd")
 
 
 func _init() -> void:
@@ -30,6 +32,11 @@ func _init() -> void:
 	await _test_escape_comes_back(t)
 	await _test_options_survive_a_match(t)
 	await _test_host_lobby_then_start(t)
+	await _test_a_local_match_ends_on_the_victory_screen(t)
+	await _test_a_hosted_match_ends_back_in_the_lobby(t)
+	await _test_a_dead_server_returns_to_the_menu(t)
+	await _test_nobody_answering_is_said_on_the_menu(t)
+	await _test_the_editor_in_a_network_game(t)
 	quit(t.finish())
 
 
@@ -291,6 +298,193 @@ func _test_host_lobby_then_start(t: T_) -> void:
 			break
 	t.ok(main.client.playing(), "request_start() begins the round")
 	main.free()
+
+
+## docs/IMPROVEMENTS.md A1 asked for the local path to be checked as well as
+## the network one: a won local match must leave the field for the victory
+## screen on its own, without anybody having to know about Escape.
+func _test_a_local_match_ends_on_the_victory_screen(t: T_) -> void:
+	var main := await _boot()
+	main.menu.scheme_index = main.menu.scheme_names.size() - 1
+	main.menu.wins = 1
+	main.menu.cursor = Menu_.Item.START
+	main.menu.activate()
+	main._start_from_menu()
+	await process_frame
+	if not t.ok(main.mode == Main.Mode.LOCAL, "a local game is running"):
+		main.free()
+		return
+	var survivor: int = -1
+	for p in main.sim.players:
+		if p.in_play and p.alive:
+			if survivor < 0:
+				survivor = p.slot
+			else:
+				main.sim.kill(p, survivor)
+	t.ok(survivor >= 0, "somebody is left standing")
+	for _i in 600:
+		main._step()
+		if main.mode == Main.Mode.MENU:
+			break
+	t.eq(main.mode, Main.Mode.MENU, "[invariant] a won local match ends")
+	t.ok(main.screens != null
+		and main.screens.screen == Screens_.Screen.VICTORY,
+		"on the victory screen")
+	main.free()
+
+
+## The same, hosted from the menu: the host's own window must come back to
+## the lobby with the result on it, and be able to start the next match.
+## Driven by real frames, so main.gd's own _process()/_poll_client() wiring
+## is what moves it, not a test calling the pieces.
+func _test_a_hosted_match_ends_back_in_the_lobby(t: T_) -> void:
+	var main := await _boot()
+	main._prepare_setup(true)
+	main.menu.cursor = Menu_.Item.START
+	main.menu.activate()
+	main._start_from_menu()
+	await process_frame
+	if not t.ok(main.mode == Main.Mode.HOST, "hosting begins"):
+		main.free()
+		return
+	main.server.the_match.wins_to_win = 1
+	# Somebody to beat. Recorded now, seated when the round is built.
+	main.server.add_bots(1)
+	var in_lobby := func(): return main.client != null and main.client.in_lobby()
+	if not await _frames_until(in_lobby, 10.0):
+		t.ok(false, "the host reaches the lobby")
+		main.free()
+		return
+	main.client.request_start()
+	var seated := func(): return main.client.playing() and main.server.ready_count() == 1
+	if not t.ok(await _frames_until(seated, 10.0), "the round begins"):
+		main.free()
+		return
+	for p in main.server.sim.players:
+		if p.in_play and p.alive and p.slot != main.client.slot:
+			main.server.sim.kill(p, main.client.slot)
+	t.ok(await _frames_until(in_lobby, 20.0),
+		"[invariant] the won match comes back to the lobby")
+	t.eq(main.mode, Main.Mode.HOST, "still hosting, not quit or in the menu")
+	t.ok(main.view != null and main.view.sim == null
+		and main.view.lobby_active, "the view draws the lobby, not the old field")
+	t.ok(main.view != null and main.view.lobby_notice.ends_with("wins the match"),
+		"and says who won: '%s'" % (main.view.lobby_notice if main.view else ""))
+	main.client.request_start()
+	var shown := func(): return main.client.playing() and main.view.sim == main.client.sim
+	t.ok(await _frames_until(shown, 10.0), "the host starts another match from it")
+	main.free()
+
+
+## docs/IMPROVEMENTS.md A2b: when the server went away, a joined client's
+## whole application EXITED, with the reason on a console nobody was reading.
+func _test_a_dead_server_returns_to_the_menu(t: T_) -> void:
+	var port := 47671
+	var server: Server_ = Server_.new()
+	if not t.ok(server.listen(port, _grid_scheme_text(), 0, 5),
+			"a server for the joiner to lose"):
+		return
+	var main := await _boot()
+	main._teardown()
+	main._start_from_args({"join": "ws://127.0.0.1:%d" % port, "name": "joiner"})
+	var joined := func():
+		server.poll(16.0)
+		return main.client != null and main.client.playing()
+	if not t.ok(await _frames_until(joined, 10.0), "the client joins"):
+		server.close()
+		main.free()
+		return
+	server.close()
+	var back := func(): return main.mode == Main.Mode.MENU
+	t.ok(await _frames_until(back, 10.0),
+		"[invariant] losing the server goes back to the menu, not out of the game")
+	t.ok(main.screens != null and main.screens.screen == Screens_.Screen.MAIN_MENU,
+		"the main menu")
+	t.eq(main.screens.refusal if main.screens != null else "",
+		"The host ended the game", "and says why on screen")
+	t.eq(main.client, null, "the dead connection is gone")
+	main.free()
+
+
+## A join to an address where nothing listens sat in CONNECTING forever.
+func _test_nobody_answering_is_said_on_the_menu(t: T_) -> void:
+	var main := await _boot()
+	main._teardown()
+	main._start_from_args({"join": "ws://127.0.0.1:47672", "name": "joiner"})
+	var back := func(): return main.mode == Main.Mode.MENU
+	t.ok(await _frames_until(back, 15.0),
+		"[invariant] a join nobody answers comes back to the menu")
+	var why: String = main.screens.refusal if main.screens != null else ""
+	t.ok(why.begins_with("Could not join: nothing answered at ws://127.0.0.1:47672"),
+		"and says so: '%s'" % why)
+	main.free()
+
+
+## docs/IMPROVEMENTS.md A2 asks for every powerup to be checked with the T
+## editor in a network game, and every editor function reached for main.gd's
+## own `sim` — null in HOST and JOIN — so the first key pressed crashed. A host
+## now edits its server, and the snapshot carries the change to every window.
+## A2c: the editor's pause cannot stop a server, so it says so.
+func _test_the_editor_in_a_network_game(t: T_) -> void:
+	var main := await _boot()
+	main._prepare_setup(true)
+	main.menu.cursor = Menu_.Item.START
+	main.menu.activate()
+	main._start_from_menu()
+	await process_frame
+	if not t.ok(main.mode == Main.Mode.HOST, "hosting begins"):
+		main.free()
+		return
+	var in_lobby := func(): return main.client != null and main.client.in_lobby()
+	await _frames_until(in_lobby, 10.0)
+	main.client.request_start()
+	var seated := func(): return main.client.playing() and main.server.ready_count() == 1
+	if not t.ok(await _frames_until(seated, 10.0), "the round begins"):
+		main.free()
+		return
+	main.view.editor_active = true
+	var me: int = main.client.slot
+	var p = main.server.sim.player_by_slot(me)
+	main.view.editor_cursor = Vector2i(p.tile_x(), p.tile_y())
+	main.view.editor_powerup = Types_.PowerUp.KICK
+	main._editor_key(KEY_G)
+	t.ok(main.server.sim.player_by_slot(me).can_kick,
+		"[invariant] G gives the host's server player the kick")
+	var arrived := func(): return main.client.sim.player_by_slot(me).can_kick
+	t.ok(await _frames_until(arrived, 5.0), "and the snapshot carries it to the window")
+	main._editor_key(KEY_X)
+	t.ok(not main.server.sim.player_by_slot(me).can_kick, "X strips it again")
+	main._editor_key(KEY_P)
+	t.ok(not main._editor_paused, "P does not pause a network game")
+	t.eq(main.view.editor_notice, "No pause in a network game", "and says so")
+	main.mode = Main.Mode.JOIN
+	main._editor_key(KEY_G)
+	t.eq(main.view.editor_notice, "Only the host can edit a network game",
+		"a joiner's edit is refused out loud, not crashed on")
+	main.mode = Main.Mode.HOST
+	main.free()
+
+
+## The built-in grid's text, for a test server that must not need the pack.
+func _grid_scheme_text() -> String:
+	var lines := PackedStringArray(["-V,2", "-N,Start fixture (10)", "-B,0"])
+	for y in Const_.FIELD_H:
+		lines.append("-R,%2d,%s" % [y, ".".repeat(Const_.FIELD_W)])
+	for p in Const_.PLAYER_COUNT:
+		lines.append("-S,%d,%d,%d,%d" % [p, 1 + p, 1 + (p % 8), p % 2])
+	for i in Const_.POWERUP_COUNT:
+		lines.append("-P,%2d, 0,0, 0, 0,x" % i)
+	return "\n".join(lines)
+
+
+## Run real frames until `cond` holds or `seconds` of wall time pass.
+func _frames_until(cond: Callable, seconds: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(seconds * 1000.0)
+	while Time.get_ticks_msec() < deadline:
+		await process_frame
+		if cond.call():
+			return true
+	return false
 
 
 static func _press(code: Key) -> InputEventKey:
