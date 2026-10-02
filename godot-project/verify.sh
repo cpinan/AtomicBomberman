@@ -34,6 +34,17 @@ if [ ! -x "$GODOT" ]; then
     exit 2
 fi
 
+# A running game holds the LAN discovery port (scripts/net/discovery.gd's
+# BEACON_PORT), and test_discovery.gd then fails with "cannot listen on 47601"
+# — which looks exactly like a real regression and cost time twice. Say what
+# it actually is, before spending minutes producing a misleading failure.
+if command -v lsof >/dev/null 2>&1 \
+        && holder=$(lsof -nP -iUDP:47601 -t 2>/dev/null) && [ -n "$holder" ]; then
+    echo "verify: UDP 47601 is held by pid $(echo $holder | tr '\n' ' ')"
+    echo "        — a game window is probably still open. Close it and run again."
+    exit 2
+fi
+
 # ---------------------------------------------------------------------------
 # Generated sources. values.gd and extras.gd are produced from the original's
 # own data files and are NOT committed (see tools/valuelist.py's docstring), so
@@ -161,14 +172,14 @@ rm -rf "$STATS_DIR"
 # ---------------------------------------------------------------------------
 if [ -f "$HERE/data/packs/cd.bin" ] || [ -f "$HERE/data/packs/cd/pack.json" ]; then
     KIT_DIR="$(mktemp -d)"
-    if python3 "$HERE/../tools/artpack.py" --template "$KIT_DIR/kit" \
+    if "$PYTHON" "$HERE/../tools/artpack.py" --template "$KIT_DIR/kit" \
             >/dev/null 2>&1 \
-        && python3 "$HERE/../tools/artpack.py" --check "$KIT_DIR/kit" \
+        && "$PYTHON" "$HERE/../tools/artpack.py" --check "$KIT_DIR/kit" \
             >/dev/null 2>&1 \
-        && python3 "$HERE/../tools/artpack.py" --build "$KIT_DIR/kit" \
+        && "$PYTHON" "$HERE/../tools/artpack.py" --build "$KIT_DIR/kit" \
             --out "$KIT_DIR/pack" >/dev/null 2>&1 \
         && [ -f "$KIT_DIR/pack.bin" ]; then
-        kit_sheets=$(python3 -c "import json,sys;print(len(json.load(open('$KIT_DIR/kit/kit.json'))['required']['sheets']))" 2>/dev/null || echo 0)
+        kit_sheets=$("$PYTHON" -c "import json,sys;print(len(json.load(open('$KIT_DIR/kit/kit.json'))['required']['sheets']))" 2>/dev/null || echo 0)
         echo "  ok   artpack — kit of $kit_sheets sheets went out and came back"
     else
         echo "  FAIL artpack — the art kit did not survive a round trip"
@@ -188,7 +199,7 @@ fi
 # the one part of this gate that is not yet portable off this platform.
 # ---------------------------------------------------------------------------
 if [ -d "$HERE/../original-game/SCHEMES" ]; then
-    if python3 "$HERE/../tools/schemes.py" --compare >/tmp/verify_schemes.$$ 2>&1; then
+    if "$PYTHON" "$HERE/../tools/schemes.py" --compare >/tmp/verify_schemes.$$ 2>&1; then
         tail -1 /tmp/verify_schemes.$$ | sed 's/^/  ok   /'
     else
         echo "  FAIL schemes --compare — the two parsers disagree"
