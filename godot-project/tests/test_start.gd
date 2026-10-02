@@ -20,6 +20,7 @@ const Menu_ := preload("res://scripts/app/menu.gd")
 const Main := preload("res://scripts/app/main.gd")
 const Screens_ := preload("res://scripts/app/screens.gd")
 const Server_ := preload("res://scripts/net/server.gd")
+const Discovery_ := preload("res://scripts/net/discovery.gd")
 
 
 func _init() -> void:
@@ -40,6 +41,7 @@ func _init() -> void:
 	_test_flags_before_the_separator(t)
 	_test_hosting_lines(t)
 	_test_an_address_is_joined_directly(t)
+	await _test_the_lan_list_waits_for_its_port(t)
 	quit(t.finish())
 
 
@@ -509,6 +511,22 @@ func _test_an_address_is_joined_directly(t: T_) -> void:
 	t.eq(Main.address_url("LOCALHOST"), "ws://localhost:47600", "localhost")
 	t.eq(Main.address_url("AB3XZ"), "", "a room code is not an address")
 	t.eq(Main.address_url("1.2.3.4:PORT"), "", "nor is a junk port")
+
+
+## Two windows on one machine: the second could not get the discovery port
+## at its menu, and never tried again — so it still listed nothing after the
+## first started hosting and let go of it. It retries now.
+func _test_the_lan_list_waits_for_its_port(t: T_) -> void:
+	var holder := Discovery_.new()
+	if not t.ok(holder.listen(), "this test can hold the discovery port"):
+		return
+	var main := await _boot()
+	t.eq(main.lan, null, "a menu opened while another window holds the port has no list")
+	holder.close()
+	var got := func(): return main.lan != null
+	t.ok(await _frames_until(got, 5.0),
+		"[invariant] and gets one once the port is free")
+	main.free()
 
 
 ## The built-in grid's text, for a test server that must not need the pack.

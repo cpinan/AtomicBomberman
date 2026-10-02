@@ -194,6 +194,7 @@ var _slot_team: Array[int] = []
 ## only interesting when you are looking for one.
 var lan: Discovery_ = null
 var _lan_ms: int = 0
+var _lan_retry_ms: int = 0
 
 var campaign: Campaign_ = null
 var campaign_stage: int = 0
@@ -1064,6 +1065,20 @@ func _process(delta: float) -> void:
 			lan.poll(delta * 1000.0, _lan_ms)
 			if screens != null:
 				screens.net_games = lan.games()
+		elif not OS.has_feature("web"):
+			# KEEP TRYING FOR THE PORT. Only one process on a machine can hold
+			# the beacon port, so a second window at the menu has no list —
+			# and it never tried again, so it still had none after the first
+			# window started hosting and let go of it. Two windows on one
+			# machine, the usual way to try network play, then showed "No net
+			# games found!" beside a game that was being announced.
+			_lan_retry_ms += int(delta * 1000.0)
+			if _lan_retry_ms >= 1000:
+				_lan_retry_ms = 0
+				var again := Discovery_.new()
+				if again.listen():
+					lan = again
+					print("main: LAN game list is listening now")
 		# The screens have music of their own on the disc — SOUNDLST 1000 title,
 		# 1010 menu, 1020 the input-selection screen, 1030 game over, 1040
 		# network. A menu in silence was the first thing anyone noticed.
