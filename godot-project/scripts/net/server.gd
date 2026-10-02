@@ -507,11 +507,7 @@ func _join(from: int, msg: Dictionary) -> void:
 	if int(msg["version"]) != Protocol_.VERSION:
 		_send(from, Protocol_.reject(Protocol_.REJECT_VERSION))
 		return
-	var name: String = msg["name"]
-	for id in peers:
-		if String(peers[id]["name"]) == name:
-			_send(from, Protocol_.reject(Protocol_.REJECT_NAME_TAKEN))
-			return
+	var name := _unique_name(String(msg["name"]))
 
 	# WAITING: seat them in the roster, not in the sim — there is no sim yet.
 	# S_WELCOME (and the round itself) waits for the host's own C_START.
@@ -544,6 +540,26 @@ func _join(from: int, msg: Dictionary) -> void:
 	_send(from, _match_packet())
 	player_joined.emit(slot, name)
 	_note("%s joined as slot %d" % [name, slot])
+
+
+## A taken name gets a number rather than a refusal: "alice", "alice 2".
+##
+## The refusal (REJECT_NAME_TAKEN) made every menu-only join fail. A game
+## started from the menu is named "player" unless --name says otherwise, so a
+## host and a guest who had both just opened the game collided on their very
+## first attempt — and the guest was told "that name is taken" about a name
+## they never chose. The code stays in the protocol so an old server's
+## refusal still reads properly.
+func _unique_name(wanted: String) -> String:
+	var taken := {}
+	for id in peers:
+		taken[String(peers[id]["name"])] = true
+	if not taken.has(wanted):
+		return wanted
+	var n := 2
+	while taken.has("%s %d" % [wanted, n]):
+		n += 1
+	return "%s %d" % [wanted, n]
 
 
 ## A seat for a lobby arrival — no sim exists yet to check `is_bot()` against,

@@ -237,12 +237,11 @@ func _choose() -> void:
 				join_url = selected_join_url()
 				action = Action.JOIN
 			elif join_url.is_empty():
-				# Said plainly. Typing a URL with arrow keys is worse than not
-				# offering it, so a join comes from --join on the desktop or
-				# from the browser's ?join= query string, which is how
-				# server/README.md tells people to share a game.
-				refusal = ("no server to join: start with --join ws://host:port"
-					+ ", or open the page with ?join=ws://host:port")
+				# Said plainly, and as something a player can act on: the
+				# field under the list takes the host's address as well as a
+				# room code (main.gd's address_url()). It used to tell them to
+				# relaunch with --join, which nobody playing will ever do.
+				refusal = "No games found. Type the host's address, then Enter"
 			else:
 				action = Action.JOIN
 		Menu.OPTIONS:

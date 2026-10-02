@@ -187,10 +187,14 @@ func _draw_net_games() -> void:
 				Color(1, 0.95, 0.6) if chosen else INK)
 			y += 16.0
 
-	var code_line := "Or type a room code: %s_" % screens.typed_code
+	# Label and value on two lines: an address with a port is 21 characters
+	# and ran off the right edge of the screen sharing a line with the label.
 	if screens.looking_up:
-		code_line = "Looking up %s…" % screens.typed_code
-	_shadowed(small, Vector2(x, y), code_line,
+		_shadowed(small, Vector2(x, y), "Looking up %s…" % screens.typed_code,
+			Color(1, 0.95, 0.6))
+		return
+	_shadowed(small, Vector2(x, y), "Host address or room code:", INK_DIM)
+	_shadowed(small, Vector2(x, y + 16.0), "> %s_" % screens.typed_code,
 		Color(1, 0.95, 0.6) if not screens.typed_code.is_empty() else INK_DIM)
 
 

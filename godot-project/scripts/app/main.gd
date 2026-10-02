@@ -950,17 +950,54 @@ func _parse_args() -> Dictionary:
 				if kv.size() == 2:
 					out[kv[0].uri_decode()] = kv[1].uri_decode()
 
-	var argv := OS.get_cmdline_user_args()
+	var user := OS.get_cmdline_user_args()
+	if not user.is_empty():
+		out.merge(flags_from(user))
+		return out
+	# THE `--` TRAP (docs/IMPROVEMENTS.md B4). Godot hands a game only what
+	# follows a bare `--`; `godot --path . --serve 47600` reaches it as
+	# nothing at all, and the player gets a plain local game with no error.
+	# Every README documented the broken form at one point. So when nothing
+	# followed a `--`, look for this game's own flags among Godot's, honour
+	# them, and say loudly how to stop needing this.
+	var stray := flags_from(OS.get_cmdline_args(), GAME_FLAGS)
+	if not stray.is_empty():
+		var names: Array = stray.keys()
+		push_warning(("%s came before the bare `--` and only reached the game by"
+			+ " luck; put game flags after it: godot --path . -- --%s ...")
+			% [", ".join(names.map(func(n): return "--" + str(n))), names[0]])
+		out.merge(stray)
+	return out
+
+
+## Every flag this file reads, for finding them where Godot left them.
+## Godot's own (--path, --resolution, --script, --headless) are not here, so
+## they and their values are skipped rather than mistaken for the game's.
+const GAME_FLAGS := ["ai-slots", "auto-bomb", "bots", "campaign",
+	"campaign-stage", "conveyor", "debug-grid", "dedicated", "directory",
+	"diseases", "enclose", "fullscreen", "gold", "join", "key-slots",
+	"kill-total", "level", "lost-net-ai", "menu", "mute", "name", "no-music",
+	"pack", "pack-overlay", "pad-slots", "players", "public-host",
+	"quit-tick", "random-start", "scale", "scheme", "screen", "seconds",
+	"seed", "serve", "shot", "shot-tick", "slot-teams", "stats-off",
+	"stats-path", "stomped", "teams", "wins"]
+
+
+## `--name value` and bare `--switch` pairs. With `only`, anything else is
+## skipped along with its value.
+static func flags_from(argv: PackedStringArray, only: Array = []) -> Dictionary:
+	var out := {}
 	var i := 0
 	while i < argv.size():
 		var a: String = argv[i]
 		if a.begins_with("--"):
 			var name := a.substr(2)
-			if i + 1 < argv.size() and not (argv[i + 1] as String).begins_with("--"):
-				out[name] = argv[i + 1]
+			var has_value := i + 1 < argv.size() \
+				and not (argv[i + 1] as String).begins_with("--")
+			if only.is_empty() or only.has(name):
+				out[name] = argv[i + 1] if has_value else true
+			if has_value:
 				i += 1
-			else:
-				out[name] = true
 		i += 1
 	return out
 
@@ -1205,6 +1242,9 @@ func _poll_client(delta: float) -> void:
 				# reason to be told it back.
 				view.lobby_room_code = directory.last_code \
 					if directory != null and mode == Mode.HOST else ""
+				view.lobby_hosting_lines = hosting_lines(server.port,
+					lan_addresses()) if mode == Mode.HOST and server != null \
+					else PackedStringArray()
 			view.queue_redraw_all()
 		return
 
@@ -1644,6 +1684,39 @@ func _on_client_round_started(_round_index: int, _level: int) -> void:
 		sfx.new_round()
 
 
+## What a host needs to tell a friend, on the lobby screen rather than in a
+## terminal (docs/NETWORK_PLAN.md item 1). A player who has never seen a
+## command line should be able to read this out over voice chat.
+static func hosting_lines(port: int, lan: Array) -> PackedStringArray:
+	var out := PackedStringArray()
+	out.append("")
+	if lan.is_empty():
+		out.append("No network address found — only this machine can join")
+	else:
+		out.append("On this network: ws://%s:%d" % [lan[0], port])
+	out.append("Others choose Join Network Game; this game is listed")
+	out.append("Over the internet: forward TCP port %d to this machine" % port)
+	return out
+
+
+## This machine's private IPv4 addresses, the ones a LAN guest can reach.
+## Loopback, link-local and IPv6 are left out: none of them is something to
+## read out to somebody else.
+static func lan_addresses() -> Array:
+	var out := []
+	for a in IP.get_local_addresses():
+		var ip := String(a)
+		if not ip.is_valid_ip_address() or ip.contains(":"):
+			continue
+		var o := ip.split(".")
+		var b := int(o[1])
+		if o[0] == "10" or (o[0] == "192" and o[1] == "168") \
+				or (o[0] == "172" and b >= 16 and b <= 31):
+			out.append(ip)
+	out.sort()
+	return out
+
+
 ## The match was won and the server reopened the room. The view drops the
 ## finished field (it draws the lobby only without one) and says who won, so
 ## the result is not lost the moment the field is.
@@ -2040,7 +2113,11 @@ func _menu_input(event: InputEvent) -> void:
 		var code := key.unicode
 		var is_alnum := (code >= 48 and code <= 57) \
 			or (code >= 65 and code <= 90) or (code >= 97 and code <= 122)
-		if is_alnum and screens.typed_code.length() < 5:
+		# '.', ':' and '-' too, and room for a whole address: the same field
+		# takes the host's address (docs/NETWORK_PLAN.md item 2), which is the
+		# only way in from the menu without a directory service.
+		var is_address := code == 46 or code == 58 or code == 45
+		if (is_alnum or is_address) and screens.typed_code.length() < 40:
 			screens.typed_code += String.chr(code).to_upper()
 			screens.refusal = ""
 			if menu_view != null:
@@ -2272,6 +2349,24 @@ func _join_from_screen() -> void:
 	_start_from_args(args)
 
 
+## A typed host address as a URL to join, or "" if it is not one — then it is
+## a room code. An address has a dot or a colon in it (192.168.1.20,
+## host.example:47601) or is "localhost"; directory/'s codes are five letters
+## and digits and have neither. The port defaults to the menu's own 47600.
+static func address_url(typed: String) -> String:
+	var t := typed.strip_edges().to_lower()
+	if t.begins_with("ws://") or t.begins_with("wss://"):
+		return t
+	if not (t.contains(".") or t.contains(":") or t == "localhost"):
+		return ""
+	var parts := t.split(":")
+	if parts.size() > 2 or parts[0].is_empty():
+		return ""
+	if parts.size() == 2 and not parts[1].is_valid_int():
+		return ""
+	return "ws://%s:%s" % [parts[0], parts[1] if parts.size() == 2 else "47600"]
+
+
 ## The JOIN_NETWORK screen's code-entry field, submitted. Looks the code up
 ## with whatever directory --directory named (a joiner needs the same
 ## directory URL the host registered with — there's no way to guess it), and
@@ -2279,8 +2374,15 @@ func _join_from_screen() -> void:
 func _join_by_code() -> void:
 	if screens == null or screens.typed_code.is_empty():
 		return
+	var direct := address_url(screens.typed_code)
+	if not direct.is_empty():
+		screens.join_url = direct
+		_join_from_screen()
+		return
 	if not _args.has("directory"):
-		screens.refusal = "no --directory given: nothing to look codes up in"
+		screens.refusal = ("%s is not an address, and room codes need a"
+			+ " directory server. Type the host's address, e.g. 192.168.1.20") \
+			% screens.typed_code
 		return
 	if directory == null:
 		directory = Directory_.new()

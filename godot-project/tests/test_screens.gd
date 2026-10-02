@@ -123,16 +123,17 @@ func _test_every_item_goes_somewhere(t: T_) -> void:
 	t.eq(s.activate(), Screens_.Action.QUIT, "Exit Bomberman quits")
 
 
-# Typing a URL with arrow keys is worse than not offering it, so a join comes
-# from --join or from the browser's ?join= query string. Without one the screen
-# says so rather than appearing to do nothing.
+# With nothing heard on the LAN and no URL, the screen says what a PLAYER can
+# do about it: type the host's address into the field under the list
+# (main.gd's address_url()). It used to name --join and ?join=, which told a
+# player to relaunch from a terminal — docs/NETWORK_PLAN.md item 2.
 func _test_join_refuses_without_a_url(t: T_) -> void:
 	var s := _at(Screens_.Screen.MAIN_MENU)
 	s.cursor = Screens_.Menu.JOIN_NETWORK
 	t.eq(s.activate(), Screens_.Action.NONE, "with no URL, joining does nothing")
 	t.ok(not s.refusal.is_empty(), "and says why: %s" % s.refusal)
-	t.ok(s.refusal.contains("--join"), "naming the flag")
-	t.ok(s.refusal.contains("?join="), "and the query string")
+	t.ok(s.refusal.contains("address"), "pointing at the address field")
+	t.ok(not s.refusal.contains("--"), "and not at a command-line flag")
 	t.eq(s.screen, Screens_.Screen.MAIN_MENU, "and stays put")
 
 	s.join_url = "ws://127.0.0.1:47600"

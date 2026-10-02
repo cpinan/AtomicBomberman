@@ -171,14 +171,20 @@ func _test_rejections(t: T_) -> void:
 			break
 	t.ok(a.playing(), "the first alice joins")
 
+	# A second alice is renamed, not refused: every game started from the
+	# menu is called "player", so refusing made every menu-only join fail.
 	dup.connect_to("ws://127.0.0.1:%d" % (PORT + 1), "alice")
 	for _i in 120:
 		await _pump(server, [a, dup])
-		if dup.state == Client_.State.REFUSED:
+		if dup.playing():
 			break
-	t.eq(dup.state, Client_.State.REFUSED, "the second alice is refused")
-	t.eq(dup.reject_reason, Protocol_.REJECT_TEXT[Protocol_.REJECT_NAME_TAKEN],
-		"and told why")
+	t.ok(dup.playing(), "the second alice joins too")
+	var names := []
+	for id in server.peers:
+		names.append(String(server.peers[id]["name"]))
+	names.sort()
+	t.eq(names, ["alice", "alice 2"], "as alice 2")
+	dup.close()
 
 	# Junk must not take the server down. A stranger who can crash a server is
 	# a reason nobody hosts one.

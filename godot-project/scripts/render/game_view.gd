@@ -63,6 +63,9 @@ var lobby_active: bool = false
 var lobby_roster: Array = []
 var lobby_is_host: bool = false
 var lobby_room_code: String = ""
+## How others reach this game — set by main.gd on the HOST only
+## (docs/NETWORK_PLAN.md item 1). Empty for a joiner, who is already here.
+var lobby_hosting_lines: PackedStringArray = PackedStringArray()
 
 ## A one-off line under the lobby roster, counted down in ticks by main.gd.
 ## Pressing Enter as a non-host did nothing visible at all — the server is
@@ -1190,6 +1193,7 @@ func _draw_lobby() -> void:
 		else "WAITING IN LOBBY")
 	if not lobby_room_code.is_empty():
 		lines.append("Room code: %s" % lobby_room_code)
+	lines.append_array(lobby_hosting_lines)
 	lines.append("")
 	if lobby_roster.is_empty():
 		lines.append("  (nobody here yet)")
@@ -1204,8 +1208,8 @@ func _draw_lobby() -> void:
 		lines.append(lobby_notice)
 
 	var panel_h := 20.0 + 16.0 * lines.size()
-	var panel := Rect2(Const_.SCREEN_W / 2.0 - 180, Const_.SCREEN_H / 2.0
-		- panel_h / 2.0, 360, panel_h)
+	var panel := Rect2(Const_.SCREEN_W / 2.0 - 200, Const_.SCREEN_H / 2.0
+		- panel_h / 2.0, 400, panel_h)
 	draw_rect(panel, Color(0, 0, 0, 0.75))
 	draw_rect(panel, Color(1, 0.95, 0.5, 0.6), false, 2.0)
 	for i in lines.size():

@@ -37,6 +37,9 @@ func _init() -> void:
 	await _test_a_dead_server_returns_to_the_menu(t)
 	await _test_nobody_answering_is_said_on_the_menu(t)
 	await _test_the_editor_in_a_network_game(t)
+	_test_flags_before_the_separator(t)
+	_test_hosting_lines(t)
+	_test_an_address_is_joined_directly(t)
 	quit(t.finish())
 
 
@@ -290,6 +293,10 @@ func _test_host_lobby_then_start(t: T_) -> void:
 	t.ok(main.client.lobby_is_host, "and knows it's the host")
 	t.ok(main.view != null and main.view.lobby_active,
 		"the view was told to draw the lobby")
+	var lines: PackedStringArray = main.view.lobby_hosting_lines
+	t.ok(lines.size() >= 3, "the host's lobby says how others reach it")
+	t.ok("\n".join(lines).contains("%d" % main.server.port),
+		"including the port: %s" % " | ".join(lines))
 
 	main.client.request_start()
 	for _i in 200:
@@ -463,6 +470,45 @@ func _test_the_editor_in_a_network_game(t: T_) -> void:
 		"a joiner's edit is refused out loud, not crashed on")
 	main.mode = Main.Mode.HOST
 	main.free()
+
+
+## docs/IMPROVEMENTS.md B4: `godot --path . --serve 47600` (no bare `--`)
+## used to start a plain local game in silence. The flags are now found among
+## Godot's own, with Godot's flags and their values left alone.
+func _test_flags_before_the_separator(t: T_) -> void:
+	var argv := PackedStringArray(["--path", ".", "--resolution", "640x480",
+		"--serve", "47600", "--name", "alice", "--headless", "--debug-grid"])
+	t.eq(Main.flags_from(argv, Main.GAME_FLAGS),
+		{"serve": "47600", "name": "alice", "debug-grid": true},
+		"the game's flags are found, Godot's and their values skipped")
+	t.eq(Main.flags_from(PackedStringArray(["--join", "ws://h:1", "--teams"])),
+		{"join": "ws://h:1", "teams": true},
+		"after the separator, every flag is the game's")
+
+
+func _test_hosting_lines(t: T_) -> void:
+	var lines := Main.hosting_lines(47600, ["192.168.1.20"])
+	t.ok(lines.has("On this network: ws://192.168.1.20:47600"),
+		"the LAN address a guest types")
+	t.ok(Main.hosting_lines(47600, []).has(
+		"No network address found — only this machine can join"),
+		"and an honest line when there is none")
+	for ip in Main.lan_addresses():
+		t.ok(not String(ip).begins_with("127.") and not String(ip).contains(":"),
+			"%s is a private IPv4 address, not loopback or IPv6" % ip)
+
+
+## docs/NETWORK_PLAN.md item 2: from the menu, without flags, a player could
+## join only a game the LAN list happened to hear. The code field now takes
+## the host's address too.
+func _test_an_address_is_joined_directly(t: T_) -> void:
+	t.eq(Main.address_url("192.168.1.20"), "ws://192.168.1.20:47600",
+		"a bare IP joins on the menu's default port")
+	t.eq(Main.address_url("HOST.EXAMPLE:47601"), "ws://host.example:47601",
+		"a name and port, typed in the field's capitals")
+	t.eq(Main.address_url("LOCALHOST"), "ws://localhost:47600", "localhost")
+	t.eq(Main.address_url("AB3XZ"), "", "a room code is not an address")
+	t.eq(Main.address_url("1.2.3.4:PORT"), "", "nor is a junk port")
 
 
 ## The built-in grid's text, for a test server that must not need the pack.
