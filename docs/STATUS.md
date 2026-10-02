@@ -1,6 +1,6 @@
 # STATUS — Atomic Bomberman (Godot 4 port)
 
-_Last updated: 2026-10-02 · branch `main` · 0 uncommitted files, 7 commits unpushed_
+_Last updated: 2026-10-02 · branch `main` · 0 uncommitted files, 9 commits unpushed_
 
 ## Next action
 
@@ -50,7 +50,7 @@ it under `caffeinate -i`.
   `~/AtomicBomberman-sha-map-old-to-new.txt`. Checked 2026-10-02: the remote
   `main` matches the local one and no `win/` objects remain. The permission
   system blocked the agent from deleting them, so this one is for the user.
-- Push the 7 local commits (`80a045c`..HEAD) when the live test above passes.
+- Push the local commits (`80a045c`..HEAD) when the live test above passes.
 - A3, the level selection screen, and B2, a held-powerups HUD strip — design
   decisions; check what the original shows first.
 - Room codes need a `--directory` server; no default one exists, so the menu
