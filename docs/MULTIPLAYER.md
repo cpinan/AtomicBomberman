@@ -46,7 +46,7 @@ The host presses `Enter` to play again; nobody has to relaunch.
 | *Could not join: nothing answered at ws://…* | Wrong address, the host is not up yet, or a firewall. Over the internet, the host's router must forward the port |
 | *Could not join: protocol version mismatch* | The two of you run different builds. Both update |
 | *Could not join: the game is full* | Ten players already |
-| *The host ended the game* | The host quit or lost their connection; you are back at the menu |
+| *Lost the connection to the host* | The host quit, or either of your connections dropped. Join again with the same name mid-match and you get your own seat and score back |
 | *Only the host can start this game* | You pressed `Enter` in a lobby you did not open |
 
 Two players with the same name are both let in; the second shows as

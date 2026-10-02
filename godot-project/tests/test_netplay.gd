@@ -38,6 +38,7 @@ func _init() -> void:
 	await _test_a_lobby_does_not_reap_people_for_waiting(t)
 	await _test_animation_timers_reach_the_client(t)
 	await _test_a_won_match_returns_to_the_lobby(t)
+	await _test_a_dropped_player_gets_their_seat_back(t)
 	quit(t.finish())
 
 
@@ -1110,4 +1111,64 @@ func _test_a_won_match_returns_to_the_lobby(t: T_) -> void:
 
 	for client in all:
 		client.close()
+	server.close()
+
+
+## docs/IMPROVEMENTS.md B5: a player whose connection drops mid-match and who
+## joins again under the same name gets their own seat — colour and score —
+## back, even when an AI has been keeping it warm.
+func _test_a_dropped_player_gets_their_seat_back(t: T_) -> void:
+	var port := PORT + 15
+	var server: Server_ = Server_.new()
+	if not t.ok(server.listen(port, _scheme_text(), 0, 8), "a server for the drop"):
+		return
+	server.lost_net_to_ai = true
+	var a: Client_ = Client_.new()
+	var b: Client_ = Client_.new()
+	var c: Client_ = Client_.new()
+	for pair in [[a, "alice"], [b, "bob"], [c, "carol"]]:
+		pair[0].connect_to("ws://127.0.0.1:%d" % port, pair[1])
+	for _i in 300:
+		for cl in [a, b, c]:
+			cl.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+		await _pump(server, [a, b, c])
+		if server.ready_count() == 3:
+			break
+	if not t.ok(server.ready_count() == 3, "three players seated"):
+		server.close()
+		return
+	var bobs_slot := b.slot
+	server.the_match.wins[bobs_slot] = 1
+	# Bob drops. carol's slot is lower than nothing he could otherwise get, so
+	# without the reclaim he would land wherever _free_slot() pointed.
+	b.close()
+	for _i in 30:
+		a.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+		c.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+		await _pump(server, [a, c])
+	t.ok(server.sim.is_bot(bobs_slot), "an AI holds bob's seat while he is gone")
+
+	# A stranger arriving first must not be handed bob's seat.
+	var d: Client_ = Client_.new()
+	d.connect_to("ws://127.0.0.1:%d" % port, "dave")
+	var back: Client_ = Client_.new()
+	for _i in 200:
+		for cl in [a, c, d]:
+			cl.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+		await _pump(server, [a, c, d])
+		if d.playing():
+			break
+	back.connect_to("ws://127.0.0.1:%d" % port, "bob")
+	for _i in 200:
+		for cl in [a, c, d, back]:
+			cl.send_input(Types_.MoveState.STILL, Types_.Action.NONE)
+		await _pump(server, [a, c, d, back])
+		if back.playing():
+			break
+	t.ok(back.playing(), "bob joins again")
+	t.eq(back.slot, bobs_slot, "[invariant] into the seat he left")
+	t.ok(not server.sim.is_bot(bobs_slot), "and the AI hands it back")
+	t.eq(server.the_match.wins_of(back.slot), 1, "his round win is still his")
+	for cl in [a, c, d, back]:
+		cl.close()
 	server.close()

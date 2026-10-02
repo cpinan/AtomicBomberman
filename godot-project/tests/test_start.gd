@@ -408,7 +408,7 @@ func _test_a_dead_server_returns_to_the_menu(t: T_) -> void:
 	t.ok(main.screens != null and main.screens.screen == Screens_.Screen.MAIN_MENU,
 		"the main menu")
 	t.eq(main.screens.refusal if main.screens != null else "",
-		"The host ended the game", "and says why on screen")
+		"Lost the connection to the host", "and says why on screen")
 	t.eq(main.client, null, "the dead connection is gone")
 	main.free()
 

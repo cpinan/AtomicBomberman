@@ -1227,7 +1227,7 @@ func _poll_client(delta: float) -> void:
 			return
 		if client.state == Client_.State.CLOSED:
 			print("main: the server closed the connection")
-			_leave_network("The host ended the game" if mode == Mode.JOIN
+			_leave_network("Lost the connection to the host" if mode == Mode.JOIN
 				else "The game's server stopped", 0)
 			return
 		if view != null:

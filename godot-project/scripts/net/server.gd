@@ -137,6 +137,13 @@ var _intermission: int = -1
 ## lobby. See _back_to_lobby().
 var _match_over_hold: int = -1
 
+## name -> slot, for everyone who left during this match. A player whose
+## connection drops and who joins again under the same name gets their own
+## seat back — their colour and their score — instead of whatever slot is
+## lowest, which may be another player's colour and starts them at nil.
+## docs/IMPROVEMENTS.md B5. Cleared when the match ends.
+var _departed: Dictionary = {}
+
 ## The level the room was opened on, so the next match starts where the first
 ## one did rather than wherever Random Each Game left the last round.
 var _start_level: int = 0
@@ -382,6 +389,7 @@ func _back_to_lobby() -> void:
 	level = the_match.level
 	sim = null
 	state = State.WAITING
+	_departed.clear()
 	_intermission = -1
 	_match_over_hold = -1
 	_accum_ms = 0.0
@@ -524,7 +532,9 @@ func _join(from: int, msg: Dictionary) -> void:
 		_note("%s joined the lobby as slot %d" % [name, lobby_slot])
 		return
 
-	var slot := _free_slot()
+	var slot := _reclaim(name)
+	if slot < 0:
+		slot = _free_slot()
 	if slot < 0:
 		_send(from, Protocol_.reject(Protocol_.REJECT_FULL))
 		return
@@ -540,6 +550,23 @@ func _join(from: int, msg: Dictionary) -> void:
 	_send(from, _match_packet())
 	player_joined.emit(slot, name)
 	_note("%s joined as slot %d" % [name, slot])
+
+
+## The seat `name` held before it dropped out of this match, or -1. An AI
+## that took the seat over (lost_net_to_ai) hands it back; a seat another
+## human has since taken is theirs, and the returner gets a free one.
+func _reclaim(name: String) -> int:
+	if not _departed.has(name):
+		return -1
+	var slot: int = _departed[name]
+	_departed.erase(name)
+	if _slot_taken(slot):
+		return -1
+	if sim.is_bot(slot):
+		sim.bot_slots.erase(slot)
+		_bots.erase(slot)
+	_note("%s reclaims slot %d" % [name, slot])
+	return slot
 
 
 ## A taken name gets a number rather than a refusal: "alice", "alice 2".
@@ -631,6 +658,8 @@ func _release(id: int) -> void:
 		p.move = Types_.MoveState.STILL
 	player_left.emit(slot, String(seat["name"]))
 	_note("%s left (slot %d)" % [seat["name"], slot])
+	if state == State.PLAYING:
+		_departed[String(seat["name"])] = slot
 	peers.erase(id)
 	# MESSAGES.TXT 262's option: a lost net player can become an AI rather than
 	# vanishing. OPTIONS.BM: "If this is set to 'NO' they will be dropped out of
