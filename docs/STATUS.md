@@ -28,10 +28,6 @@ finish a match, play a second one, and walk the powerup list in
 
 ## In flight
 
-- `godot-project/scripts/render/game_view.gd` `_draw_flame_piece()` — A4,
-  the top flame arm. Diagnosis in `docs/IMPROVEMENTS.md` A4: the static
-  render does NOT reproduce it. Needs a live capture of the frame that looks
-  wrong (T editor, `P` then `.`) before any more renderer maths.
 - `scripts/app/main.gd` `_input()` and `scripts/net/server.gd` C_START —
   `AB_DEBUG_INPUT` tracing; `scripts/sim/sim.gd` `_explain_action()` —
   `AB_DEBUG_ACTIONS`. Fold into one on-screen panel (C3) before removing.
@@ -64,11 +60,10 @@ it under `caffeinate -i`.
 
 ## Do not redo
 
-- **A4: do not centre flame pieces on their ink centroid.** Tried 2026-10-02
-  and measured: it moved the north arm 0.07 px and broke the horizontal-arm
-  agreement check. The extractor is not at fault (MFLAME's hotspots are the
-  generic `(w/2,h-1)` in the ANI itself), and step `(dx,dy)` is inconsistent
-  between mid and tip pieces.
+- **A4 is fixed by moving the vertical arms onto the centre piece's stem.**
+  Do not move the centre piece instead (opens a seam to the west arm) and
+  do not ink-centre every piece on both axes (breaks the horizontal arm).
+  Measure at the JOINT — mid-cell bands cannot see this bug.
 - **A finished match goes to the lobby, not the menu, in network play** —
   `server.gd` `_back_to_lobby()`. Local play still goes to the victory screen.
 - **The player collision box is NOT the problem.** BM95.EXE `0x41EEE8`; the

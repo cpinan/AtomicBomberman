@@ -764,11 +764,14 @@ func _draw_flame_piece(on: CanvasItem, seq: String, tx: int, ty: int,
 	var src := pack.frame_rect("mflame", index)
 	var origin := Vector2(Const_.tile_origin(tx, ty))
 	var at := origin
+	# Vertical pieces go across by their ink, onto the centre piece's own
+	# stem at the same age — see _stem_x() for why the column is where the
+	# centre's art puts it rather than the cell's middle.
 	if seq.contains("north"):
-		at.x += _centre(Const_.BLOCK_W, src.size.x)
+		at.x += _column_x(age) - _stem_x("mflame", index, 0)
 		at.y += Const_.BLOCK_H - src.size.y   # flush bottom: bomb is below
 	elif seq.contains("south"):
-		at.x += _centre(Const_.BLOCK_W, src.size.x)
+		at.x += _column_x(age) - _stem_x("mflame", index, 0)
 		# flush top: bomb is above, origin.y already the top edge
 	elif seq.contains("west"):
 		at.x += Const_.BLOCK_W - src.size.x   # flush right: bomb is to the east
@@ -815,6 +818,69 @@ func _draw_flame_piece(on: CanvasItem, seq: String, tx: int, ty: int,
 ## call this function.
 static func _centre(cell: int, sprite: float) -> float:
 	return (cell - sprite) / 2.0
+
+
+## Where, across a cell, the centre piece of a flame `age` ticks old draws
+## its vertical stem. North and south pieces line up on this.
+func _column_x(age: int) -> float:
+	var index := pack.sequence_frame("mflame", "flame center green", age)
+	if index < 0:
+		return Const_.BLOCK_W / 2.0
+	var w := pack.frame_rect("mflame", index).size.x
+	return _centre(Const_.BLOCK_W, w) + _stem_x("mflame", index)
+
+
+## Where a piece's vertical stem is, across its own frame: the alpha-weighted
+## ink centroid of its top `rows` rows — STEM_ROWS for the centre piece,
+## whose crossbar is further down, or 0 for the whole frame of a north or
+## south piece, which is all stem. Cached per frame.
+##
+## docs/IMPROVEMENTS.md A4, "the top-centre arm is a few pixels right". The
+## arm was where it should be; the CENTRE piece was not. Its frames are 41 px
+## wide with the stem drawn about 2.5 px left of the frame's middle, so with
+## everything width-centred the stem sat 2.5-3 px left of the arms above and
+## below it — measured row by row on screen: arms at x 320-321.5, the
+## centre's top lobe at 317-318. Where the two met, the arm looked shifted
+## right. The crossbar has no such skew (arms and centre both at y 265-266
+## on a row middle of 266).
+##
+## The ARMS move, not the centre. Moving the centre piece onto the cell's
+## middle was tried first and closed the step, but opened a dark 2-3 px seam
+## between it and the west arm, which is flush against the cell edge. Moving
+## the vertical arms onto the centre's stem keeps the crossbar seamless; the
+## whole column then sits ~2.5 px left of the cell's middle, which nothing on
+## screen measures against.
+##
+## The disc agrees in its own way: the centre sequence's per-step dx is
+## +3, +2, +2, +2, +2 — the size of this skew — though what dx means in
+## general is unconfirmed (tools/anifile.py), so the ink is used rather than
+## the number.
+const STEM_ROWS := 8
+var _stem_cache: Dictionary = {}
+
+func _stem_x(sheet: String, index: int, rows: int = STEM_ROWS) -> float:
+	var key := "%s:%d:%d" % [sheet, index, rows]
+	if _stem_cache.has(key):
+		return _stem_cache[key]
+	var src := pack.frame_rect(sheet, index)
+	var stem := src.size.x / 2.0
+	var tex := pack.texture_of(sheet)
+	var img: Image = tex.get_image() if tex != null else null
+	if img != null:
+		if img.is_compressed():
+			img.decompress()
+		var total := 0.0
+		var sum := 0.0
+		for y in (int(src.size.y) if rows <= 0 else mini(rows, int(src.size.y))):
+			for x in int(src.size.x):
+				var a := img.get_pixel(int(src.position.x) + x,
+					int(src.position.y) + y).a
+				total += a
+				sum += (x + 0.5) * a
+		if total > 0.0:
+			stem = sum / total
+	_stem_cache[key] = stem
+	return stem
 
 
 # MFLAME.ANI's nine sequences map one-to-one onto the flame bits the sim sets:

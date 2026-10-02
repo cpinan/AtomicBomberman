@@ -581,7 +581,45 @@ func _test_the_flame_lines_up(t: T_, pack: Pack_, scheme: Scheme_) -> void:
 		t.close((first + last) / 2.0, want_x, 3.0,
 			"and is centred across its column (%.1f, want %.1f)"
 				% [(first + last) / 2.0, want_x])
+
+	# THE JOINT, which the checks above skip by design (they measure each
+	# arm away from the epicentre). docs/IMPROVEMENTS.md A4, "the top-centre
+	# arm is a few pixels right": the arm above was ~3 px right of the centre
+	# piece's own stem where the two meet. Each band's flame is located by
+	# weighting every changed pixel by how much it changed.
+	var cell_top: int = int(Const_.FIELD_Y_OFF) + 5 * Const_.BLOCK_H
+	var cell_bot: int = cell_top + Const_.BLOCK_H
+	var arm_above := _ink_x(base, shot, cell_top - 12, cell_top - 1)
+	# Five rows, not six: the crossbar's glow begins on the sixth and pulls
+	# the reading towards the middle of the frame.
+	var stem_top := _ink_x(base, shot, cell_top, cell_top + 5)
+	var stem_bot := _ink_x(base, shot, cell_bot - 6, cell_bot)
+	var arm_below := _ink_x(base, shot, cell_bot, cell_bot + 12)
+	t.note("joint: arm above %.2f, centre top %.2f, centre bottom %.2f, arm below %.2f"
+		% [arm_above, stem_top, stem_bot, arm_below])
+	t.close(arm_above, stem_top, 1.0,
+		"[invariant] the arm above meets the centre's stem (%.2f vs %.2f)"
+			% [arm_above, stem_top])
+	t.close(arm_below, stem_bot, 1.5,
+		"and so does the arm below (%.2f vs %.2f)" % [arm_below, stem_bot])
 	view.queue_free()
+
+
+## Column 7's flame across rows [y0, y1): the x every changed pixel averages
+## to, weighted by how much it changed.
+static func _ink_x(base: Image, shot: Image, y0: int, y1: int) -> float:
+	var total := 0.0
+	var sum := 0.0
+	for y in range(y0, y1):
+		for x in range(int(Const_.FIELD_X_OFF) + 6 * Const_.BLOCK_W,
+				int(Const_.FIELD_X_OFF) + 9 * Const_.BLOCK_W):
+			var a := base.get_pixel(x, y)
+			var b := shot.get_pixel(x, y)
+			var w := absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
+			if w > 0.2:
+				total += w
+				sum += (x + 0.5) * w
+	return sum / total if total > 0.0 else 0.0
 
 
 ## Was anything drawn at (x, y) in `shot` that was not in `base`?
