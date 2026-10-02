@@ -22,7 +22,7 @@ const Player_ := preload("res://scripts/sim/player.gd")
 const Bomb_ := preload("res://scripts/sim/bomb.gd")
 
 ## Bumped when the layout changes, alongside Protocol.VERSION.
-const LAYOUT := 3
+const LAYOUT := 4
 
 
 static func write(sim: RefCounted) -> PackedByteArray:
@@ -186,6 +186,7 @@ static func _read_player(p: Player_, d: PackedByteArray, at: int) -> void:
 	p.punch_ticks = _get_i32(d, pos); pos += 4
 	p.cornerhead = _get_i32(d, pos); pos += 4
 	p.cornerhead_ticks = _get_i32(d, pos); pos += 4
+	p.death_tick = _get_i32(d, pos); pos += 4
 	p.invulnerable = _get_i32(d, pos); pos += 4
 	p.pickups = _get_i32(d, pos); pos += 4
 	for i in Const_.POWERUP_COUNT:
@@ -216,7 +217,8 @@ static func _read_bomb(b: Bomb_, d: PackedByteArray, at: int) -> void:
 	b.detonated = d[pos] != 0; pos += 1
 	b.fuze = d[pos] | (d[pos + 1] << 8); pos += 2
 	b.flame_len = d[pos]; pos += 1
-	b.placed_tick = _get_i32(d, pos)
+	b.placed_tick = _get_i32(d, pos); pos += 4
+	b.fly_height = _get_i32(d, pos)
 
 
 static func _put_i32(b: PackedByteArray, v: int) -> void:

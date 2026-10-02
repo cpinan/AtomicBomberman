@@ -278,6 +278,11 @@ func to_bytes() -> PackedByteArray:
 	_append_i32(b, punch_ticks)
 	_append_i32(b, cornerhead)
 	_append_i32(b, cornerhead_ticks)
+	# And the tick the death began. game_view.gd's _draw_death() picks the
+	# frame as `tick_count - death_tick`; with death_anim carried but this
+	# not, a client's death_tick stayed at -1, every death read as already
+	# played out, and nobody animated dying over the network after all.
+	_append_i32(b, death_tick)
 	_append_i32(b, invulnerable)
 	_append_i32(b, pickups)
 	for c in collected:

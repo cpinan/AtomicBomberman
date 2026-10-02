@@ -155,6 +155,9 @@ func to_bytes() -> PackedByteArray:
 	b.append((fuze >> 8) & 0xFF)
 	b.append(flame_len & 0xFF)
 	_append_i32(b, placed_tick)
+	# The arc's peak, which game_view.gd lifts a flying bomb by. Left out, a
+	# punched bomb slid along the ground on every client.
+	_append_i32(b, fly_height)
 	return b
 
 

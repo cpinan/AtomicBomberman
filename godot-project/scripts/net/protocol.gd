@@ -58,7 +58,10 @@ const Const_ := preload("res://scripts/core/const.gd")
 ## 6 -> 7: S_LOBBY may follow S_WELCOME. A won match reopens the room
 ## (server.gd's _back_to_lobby()), and a client must leave PLAYING when told
 ## so — a version-6 client ignored it and sat on the finished field forever.
-const VERSION := 7
+## 7 -> 8: a player record carries death_tick and a bomb record fly_height
+## — the two fields game_view.gd reads that no snapshot carried, found by
+## tests/test_snapshot_coverage.gd. Snapshot.LAYOUT moves alongside this.
+const VERSION := 8
 
 # Client -> server
 const C_HELLO := 1        ## name, protocol version

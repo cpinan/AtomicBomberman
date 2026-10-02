@@ -391,7 +391,7 @@ func _test_match_message(t: T_) -> void:
 	# snapshot carries, so without them a networked player died, kicked and
 	# punched with no animation — and a version-5 client reading a version-6
 	# record would misread everything after warp_cooldown.
-	t.eq(Protocol_.VERSION, 7, "the protocol version moved with each layout")
+	t.eq(Protocol_.VERSION, 8, "the protocol version moved with each layout")
 
 
 # The client rebuilds its field when a match message names a different LEVEL.
