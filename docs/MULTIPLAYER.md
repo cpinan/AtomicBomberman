@@ -1,18 +1,56 @@
 # Playing with other people
 
-Three ways, easiest first. All of them work on one machine.
+Four ways, easiest first. All of them work on one machine.
 
-> **The one thing that trips everybody up:** the game's own flags must come
-> after a bare `--`. Godot eats the ones before it.
+> **Flags go after a bare `--`.** Godot keeps the ones before it for itself.
 >
 > ```bash
-> godot --path . -- --serve 47600      # works
-> godot --path . --serve 47600         # silently ignored
+> godot --path . -- --serve 47600      # right
+> godot --path . --serve 47600         # works, with a warning telling you to fix it
 > ```
 >
-> Everything below already has the `--` in the right place. `godot` here means
-> the Godot 4 binary; on a Mac that is usually
-> `/Applications/Godot.app/Contents/MacOS/Godot`.
+> The second form used to be silently ignored and gave you a plain local game.
+> The game now finds its own flags among Godot's and warns. Everything below
+> has the `--` in the right place. `godot` here means the Godot 4 binary; on a
+> Mac that is usually `/Applications/Godot.app/Contents/MacOS/Godot`.
+
+---
+
+## 0. From the menu — no terminal at all
+
+**To host:** choose **Start Network Game**, set up the match, press `Enter`.
+You land in a lobby that shows everything a friend needs:
+
+```
+WAITING IN LOBBY
+
+On this network: ws://192.168.1.20:47600
+Others choose Join Network Game; this game is listed
+Over the internet: forward TCP port 47600 to this machine
+```
+
+Read the address out over voice chat. Press `Enter` when everyone is in.
+
+**To join:** choose **Join Network Game**. Games on your network are listed
+under the menu — pick one with left/right and press `Enter`. If yours is not
+listed, type the host's address in the field below the list (`192.168.1.20`,
+or `host:port` if they changed the port) and press `Enter`.
+
+**When the match is won** everyone goes back to the lobby, which says who won.
+The host presses `Enter` to play again; nobody has to relaunch.
+
+**What the messages mean:**
+
+| On screen | Meaning |
+|---|---|
+| *Could not join: nothing answered at ws://…* | Wrong address, the host is not up yet, or a firewall. Over the internet, the host's router must forward the port |
+| *Could not join: protocol version mismatch* | The two of you run different builds. Both update |
+| *Could not join: the game is full* | Ten players already |
+| *The host ended the game* | The host quit or lost their connection; you are back at the menu |
+| *Only the host can start this game* | You pressed `Enter` in a lobby you did not open |
+
+Two players with the same name are both let in; the second shows as
+`player 2`. Pass `--name` to choose one.
 
 ---
 
@@ -128,16 +166,16 @@ players find a game without typing an IP.
 
 ## If something goes wrong
 
-**The client cannot connect.** Check the host is up first — start it, wait for
-its window, then start the client. Check the port matches on both sides.
+**The client cannot connect.** The menu says *nothing answered at …*. Check
+the host is up first — start it, wait for its lobby, then join. Check the
+port matches on both sides.
 
 **`cannot listen on 47601`.** Expected on every window after the first. See
 above.
 
-**Tests fail while a game is open.** They will. `tools/verify.sh` and a live
-window both want the LAN discovery port, and `test_discovery.gd` fails with
-`cannot listen on 47601` that looks exactly like a real regression. Close every
-game window before running the suite:
+**Tests refuse to run while a game is open.** `tools/verify.sh` and a live
+window both want the LAN discovery port, so verify stops at once and names
+the process holding it. Close every game window first:
 
 ```bash
 pkill -f "Godot --path"

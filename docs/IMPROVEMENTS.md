@@ -90,10 +90,29 @@ the current one — then deciding. A preview existed and was fixed in
 
 ### A4. The flame's top-centre arm is a few pixels right
 
-Open since this morning, diagnosed, unfixed. `docs/POWERUP_TEST_RANGE_PLAN.md`
-"Still-open bugs" item 2 has the measurements. **Check
-`tools/pack_assets.py` before touching renderer maths** — it decides whether
-the fix is in the renderer or in the extractor.
+Open, unfixed. `docs/POWERUP_TEST_RANGE_PLAN.md` "Still-open bugs" item 2
+has the first diagnosis. Settled on 2026-10-02:
+
+- **The extractor is not at fault.** `tools/pack_assets.py` writes each
+  frame's real hotspot; MFLAME.ANI itself stores the generic `(w/2, h-1)` on
+  all 45 frames. Nothing is lost on the way to `pack.json`.
+- **Each sequence step's `(dx, dy)` does not explain it either.** Centre
+  pieces carry dx +2/+3, north -1, mid-south 0..+2, tip-south +2 — mid and
+  tip south disagree by 2 px where their ink differs by under 1.
+- **Ink inside the frames** (alpha-weighted centroid vs frame middle):
+  centre piece 0.6-1.1 px left, north pieces 0.4-0.9 px right, south pieces
+  0.4-0.7 px left.
+- **But on screen** (render_field's flame scene, changed pixels weighted by
+  how much they changed): the north arm's flame is ON its column's middle
+  (319.91 vs 320.0) and the SOUTH arm is 0.6 px right (320.64). Centring
+  every piece on its ink centroid instead of its frame moved north by 0.07
+  px and pushed the horizontal arm's existing 4 px agreement check to 4.5 —
+  so that fix was reverted, not shipped.
+
+So the static scene does not reproduce "top-centre arm is right". Next step
+needs eyes: capture the moment it looks wrong (which frame of the five, and
+whether it is the arm or the centre piece's top lobe that is off), with the
+T editor's `P`/`.` to freeze it, then measure THAT frame.
 
 ---
 
