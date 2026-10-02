@@ -11,6 +11,10 @@ history is in `docs/POWERUP_REVIEW_PLAN.md`.
 
 ### A1. The match never ends. BLOCKING.
 
+> **Done 2026-10-02 (`a2fe549`).** A won match returns the room to the lobby
+> with the roster intact; the host starts the next one. Local play already
+> ended on the victory screen and now has a test saying so.
+
 Captured live, from the host's own log:
 
 ```
@@ -45,6 +49,9 @@ in `docs/POWERUP_REVIEW_PLAN.md`, in both windows of a network game.
 
 ### A2b. When the server dies, the client kills the whole game
 
+> **Done 2026-10-02 (`a2fe549`).** Back to the main menu with the reason on
+> screen. A join nobody answers no longer hangs in CONNECTING.
+
 `main.gd:1187`:
 
 ```gdscript
@@ -63,6 +70,10 @@ Same question for the host side: if the server stops, its own client should
 land somewhere sensible rather than taking the process down.
 
 ### A2c. Pause in a network game
+
+> **Done 2026-10-02 (`a2fe549`): no manual pause over a network.** The
+> editor's `P` says so. The editor itself now edits the server when hosting
+> (it crashed on every key before) and refuses, out loud, when joined.
 
 Two separate things, and only one of them is wired:
 
@@ -145,11 +156,16 @@ class of "is it broken or do I not have it".
 
 ### B3. Network play cannot be started from the menu
 
+> **Done 2026-10-02 (`f5f8907`).** See NETWORK_PLAN.md items 1 and 2.
+
 Covered in `docs/NETWORK_PLAN.md` items 1 and 2. Today hosting and joining
 need command-line flags, and the empty-list message literally tells a player
 to pass `--join ws://host:port`.
 
 ### B4. The `--` trap will catch every user
+
+> **Done 2026-10-02 (`f5f8907`).** Flags before the separator are honoured
+> with a warning.
 
 `godot --path . --serve 47600` is silently ignored; the flags must come after
 a bare `--`. Both READMEs documented the broken form until today. Anyone
@@ -158,6 +174,9 @@ game and no error. Consider parsing `OS.get_cmdline_args()` as a fallback and
 warning loudly when a known flag is seen before the separator.
 
 ### B5. Losing a connection ends your match
+
+> **Done 2026-10-02 (`3577a6a`).** Rejoining under the same name mid-match
+> reclaims the seat, colour and score; an AI holding it hands it back.
 
 There is no reconnection. A dropped player's seat empties or becomes an AI;
 they cannot rejoin. For a game people play together over an evening this is
@@ -189,6 +208,10 @@ and one that drives keyboard events through `Keysets` rather than calling
 
 ### C2. Make snapshot completeness mechanical
 
+> **Done 2026-10-02 (`88c2412`).** `tests/test_snapshot_coverage.gd`. It
+> found `death_tick` and `fly_height` missing on its first run — networked
+> deaths still had no animation, punched bombs no arc.
+
 The animation bug was "a field the view reads is not serialised". That is
 checkable: enumerate the `Player_`/`Bomb_` fields `game_view.gd` touches and
 assert each appears in `snapshot.gd`. One test would close a whole class
@@ -212,6 +235,8 @@ original needs none. Three patches for one model. Worth doing only if a
 future bug traces back to it.
 
 ### C5. `tools/verify.sh` should refuse to run with a game open
+
+> **Done 2026-10-02 (`80a045c`).**
 
 A live window holds the LAN discovery port and `test_discovery.gd` then fails
 with `cannot listen on 47601`, which looks exactly like a real regression. It

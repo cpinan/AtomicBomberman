@@ -35,6 +35,10 @@ wrong it fails silently.
 
 ## 1. "Start Network Game" must explain itself
 
+> **Done 2026-10-02 (`f5f8907`)**: the host's lobby shows the LAN address,
+> how others join, and the port to forward. Not done: the room code needs a
+> directory service, which still only `--directory` provides.
+
 Today it opens the setup screen and silently begins hosting. Nothing tells
 the player what just happened, what address others need, or that their
 firewall matters.
@@ -55,6 +59,11 @@ Acceptance: a player who has never used a terminal can host a game and tell a
 friend how to reach it, using only what is on screen.
 
 ## 2. "Join Network Game" needs a real browser screen
+
+> **Mostly done 2026-10-02 (`f5f8907`)**: the field takes the host's
+> address, the empty state says what to do, and every failure reaches the
+> screen with its reason. Not done: a scrollable list of more than three
+> games, and player counts in the LAN announce.
 
 Today the list is three lines squeezed under a menu item, and an empty list
 gives a command-line instruction.
@@ -78,6 +87,12 @@ Acceptance: from a cold start with a friend hosting, a player joins using only
 the menu — no flags, no URL typed by hand.
 
 ## 3. Audit the network logic
+
+> **Progress 2026-10-02**: snapshot completeness is now a test and found two
+> more missing fields (`88c2412`); match end and reconnection fixed
+> (`a2fe549`, `3577a6a`); duplicate names no longer block a join
+> (`f5f8907`). Still open: sounds when a client is behind, and a host
+> whose window stops polling.
 
 Three real faults turned up in one session of live testing, all invisible to a
 suite of 135 passing checks, and all in the seam between the netcode and the
@@ -117,6 +132,8 @@ and only then write the test. Every one of the three was found from a log and
 none from reading code.
 
 ## 4. Document creating and joining (items 4 and 5 are the same job)
+
+> **Done 2026-10-02 (`6b2ba41`)**: `docs/MULTIPLAYER.md` section 0.
 
 `docs/MULTIPLAYER.md` covers the terminal already. What is missing is the
 player-facing half, which should live in-game and in a short page:
