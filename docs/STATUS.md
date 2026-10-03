@@ -22,12 +22,21 @@ flame work was live-tested by the user that day and passed.
   carry it). Joiners and `P` (pause) are refused with a message.
 - `tests/test_snapshot_coverage.gd` fails for any field game_view.gd reads
   that no snapshot carries. It found `death_tick` and `fly_height` missing.
+- The flame joint (A4) is fixed: vertical arms sit on the centre piece's
+  stem (`game_view.gd` `_column_x()`/`_stem_x()`); `render_field.gd` checks
+  the joint.
+- **The repo is public** (https://github.com/cpinan/AtomicBomberman) and
+  holds no disc-extracted content in tree or history.
 - All of the 2026-10-02 work was live-tested by the user on 2026-10-02
   (two windows, one machine): hosting and joining from the menu, deaths and
   punched-bomb arcs on the guest, editor refusals, match end and play
   again, rejoin, on-screen failures, and the flame joint.
 
 ## In flight
+
+- Unexamined: a window closed from the menu printed `WARNING: 2 ObjectDB
+  instances were leaked at exit` (2026-10-02). Harmless at shutdown; start
+  with `--verbose` to name the two objects.
 
 - `scripts/app/main.gd` `_input()` and `scripts/net/server.gd` C_START —
   `AB_DEBUG_INPUT` tracing; `scripts/sim/sim.gd` `_explain_action()` —
