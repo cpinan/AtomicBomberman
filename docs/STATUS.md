@@ -47,10 +47,17 @@ it under `caffeinate -i`.
 
 ## Open questions
 
-- Delete `~/AtomicBomberman-pre-rewrite-backup.bundle` (457M) and
-  `~/AtomicBomberman-sha-map-old-to-new.txt`. Checked 2026-10-02: the remote
-  `main` matches the local one and no `win/` objects remain. The permission
-  system blocked the agent from deleting them, so this one is for the user.
+- **The repository is PUBLIC since 2026-10-02.** Before that, history was
+  rewritten to purge the disc's own content: three extracted screenshots
+  and `server/schemes/{basic,og}.sch` (backup:
+  `~/AtomicBomberman-pre-public-backup.bundle`, SHA map:
+  `~/AtomicBomberman-sha-map-pre-public.txt`, the three images moved to
+  `~/AtomicBomberman-disc-extracts/`). Never commit anything extracted
+  from the disc — art, sounds, schemes or generated `values.gd`/`extras.gd`
+  /`messages.gd`; `.gitignore` covers each.
+- Delete when convenient: both backup bundles and SHA maps in `~/`
+  (`AtomicBomberman-pre-rewrite-*`, `AtomicBomberman-pre-public-*`,
+  `AtomicBomberman-sha-map-*`). The agent was blocked from deleting them.
 - A3, the level selection screen, and B2, a held-powerups HUD strip — design
   decisions; check what the original shows first.
 - Room codes need a `--directory` server; no default one exists, so the menu
