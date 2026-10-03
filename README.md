@@ -10,19 +10,18 @@ possible, the gap is written down instead of guessed over.
 For the human-language version of this document, see
 **[HUMAN_README.md](HUMAN_README.md)**.
 
-## Screenshots — original disc art vs. the Godot port
+## Screenshots — the Godot port, live
 
-The left column is the original's own art, extracted byte-for-byte from the
-disc (`tools/pcx.py`, no modification). The right column is the Godot port
-rendering the same screen, live.
+Rendered by the port from the player's own game data — the art is the
+original's, extracted from a disc at build time and never committed here.
 
-| Original (extracted from disc) | Godot port (live) |
+| Title | Main menu |
 |---|---|
-| ![original title](docs/screenshots/original-title.png) | ![port title](docs/screenshots/port-title.png) |
-| ![original main menu](docs/screenshots/original-mainmenu.png) | ![port main menu](docs/screenshots/port-mainmenu.png) |
-| ![original field background](docs/screenshots/original-field0-greenacres.png) | ![port gameplay](docs/screenshots/port-gameplay-greenacres.png) |
+| ![port title](docs/screenshots/port-title.png) | ![port main menu](docs/screenshots/port-mainmenu.png) |
 
-The gameplay shot on the right is real, not staged for the screenshot: five
+![port gameplay](docs/screenshots/port-gameplay-greenacres.png)
+
+The gameplay shot is real, not staged for the screenshot: five
 players, four simultaneous bomb explosions, and the brick/powerup/wall art
 all drawn from the original's own sprite sheets.
 

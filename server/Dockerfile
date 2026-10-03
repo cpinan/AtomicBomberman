@@ -24,8 +24,10 @@ COPY --chown=bomber:bomber server/schemes/ /srv/schemes/
 RUN chmod +x /srv/ab-server
 USER bomber
 
+# AB_SCHEME names a .SCH under /srv/schemes/, copied there from your own
+# copy of the game (server/schemes/README.md). Unset, the server plays the
+# port's built-in pillar grid — no scheme from the disc ships in this repo.
 ENV AB_PORT=47600 \
-    AB_SCHEME=/srv/schemes/basic.sch \
     AB_LEVEL=0 \
     AB_BOTS=0 \
     AB_WINS=0
@@ -40,5 +42,5 @@ EXPOSE 47600
 # up its seat when a human joins. AB_WINS overrides VALUELST resource 310's two
 # wins per match. Both default to 0, meaning "leave it alone".
 ENTRYPOINT ["/bin/sh", "-c", \
-  "exec /srv/ab-server --headless -- --dedicated $AB_PORT --scheme $AB_SCHEME --level $AB_LEVEL \
+  "exec /srv/ab-server --headless -- --dedicated $AB_PORT ${AB_SCHEME:+--scheme $AB_SCHEME} --level $AB_LEVEL \
    ${AB_BOTS:+--bots $AB_BOTS} ${AB_WINS:+--wins $AB_WINS}"]

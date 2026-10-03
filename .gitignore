@@ -59,3 +59,8 @@ __pycache__/
 
 # Claude Code's own project-local skill links — dev tooling, not game source.
 /.claude/
+
+# The dedicated server's schemes come from the host's own disc
+# (server/schemes/README.md); only the README is tracked.
+server/schemes/*.sch
+server/schemes/*.SCH

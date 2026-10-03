@@ -28,7 +28,9 @@ services:
     restart: unless-stopped
     environment:
       AB_PORT: 47600
-      AB_SCHEME: /srv/schemes/basic.sch
+      # A scheme from your own copy of the game, put in server/schemes/ first.
+      # Leave it out to play the built-in grid.
+      # AB_SCHEME: /srv/schemes/BASIC.SCH
       AB_LEVEL: 0
       # Bots fill the other seats, so the first person to join has something to
       # play against and an empty server is still a game in progress. A bot
