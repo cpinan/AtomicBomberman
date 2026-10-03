@@ -180,7 +180,7 @@ keypress actually reach that effect, (3) does it look right on screen.
   - Fixed: no visual feedback existed at all when a player was diseased —
     the mechanic worked but looked identical to being healthy. Invented a
     sickly-green tint pulse (`game_view.gd:_disease_tint`, commit
-    `5070741`) since no original art marks a disease state on the
+    `c54e8de`) since no original art marks a disease state on the
     character.
 - **Still to verify**: does the new tint read clearly without being
   distracting or mistaken for a rendering glitch, and does it stop the
@@ -226,7 +226,7 @@ keypress actually reach that effect, (3) does it look right on screen.
     the bomb) played the full punch animation and sound over a
     zero-distance flight — looked exactly like "nothing happens" in a live
     report. Now returns false / no state change in that case (fixed before
-    commit `4eac232`; `git log -p -- scripts/sim/sim.gd` around the
+    commit `412370c`; `git log -p -- scripts/sim/sim.gd` around the
     `punch_bomb` function for the exact diff).
 - **Still to verify**: this session confirmed PUNCH works correctly at BOTH
   the sim layer (`punch_bomb()` called directly) AND the real input-dispatch
@@ -246,7 +246,7 @@ keypress actually reach that effect, (3) does it look right on screen.
   (item 3 at the top of this doc) making a standing grab draw the pickup pose
   forever while the carried bomb was not drawn at all — plus KICK stealing the
   bomb first (item 1). The hold-to-carry/release-to-throw model from commit
-  `75c4734` is confirmed correct through the real Space keypress.
+  `46b9d88` is confirmed correct through the real Space keypress.
 - **Icon**: `power grab`
 - **Description**: MANUAL.BM: "Allows you to pick up (grab), carry, and
   throw your bombs." Elsewhere: "you may carry a bomb by grabbing and
@@ -258,13 +258,13 @@ keypress actually reach that effect, (3) does it look right on screen.
      the grab — trivially always true for a real keypress, so every real
      grab auto-dropped one tick after a normal release, read live as "the
      gauntlet does nothing." First fix made grab a tap that carries until
-     an explicit second press (commit `5070741`).
+     an explicit second press (commit `c54e8de`).
   2. **Superseded**: live feedback said that wasn't the wanted mechanic —
      should be genuine hold-to-carry, release-to-throw, per MANUAL.BM's
      literal wording. Reverted to that model correctly this time:
      `hold_required_to_carry` is now unconditionally true on grab, and
      releasing throws (`_throw_carried()`) instead of dropping in place
-     (commit `75c4734`).
+     (commit `46b9d88`).
 - **Still to verify — TOP PRIORITY**: fix #2 has NOT been live-confirmed
   yet. Exact steps: pick up the blue glove, drop a bomb, stand on/face it,
   HOLD the drop-bomb key (default Space), confirm it stays carried while
@@ -309,7 +309,7 @@ keypress actually reach that effect, (3) does it look right on screen.
 - **Known bugs**:
   - Fixed: the exclusivity matrix was backwards against the manual's own
     table — Trigger was dropping Spooge instead of Jelly, and Jelly/Grab/
-    Spooge's cross-drops didn't match the table at all (commit `210aa39`).
+    Spooge's cross-drops didn't match the table at all (commit `45061cb`).
     Now correct, with dedicated tests (`_test_trigger_exclusion`,
     `_test_grab_spooge_exclusion`).
 - **Still to verify**: the actual button flow, live — pick up Trigger, drop
@@ -328,7 +328,7 @@ keypress actually reach that effect, (3) does it look right on screen.
   - Fixed: a jelly bomb's wall-bounce didn't snap its position to the cell
     centre before reversing direction, so it visibly sat into the wall for
     a tick — reported live as "goes off the walls then bounces back"
-    (fixed before commit `5070741`).
+    (fixed before commit `c54e8de`).
   - Fixed: jelly bombs lost their distinctive wobble look during a
     punched/thrown flight, falling back to the generic tumble sprite every
     other bomb type uses (`game_view.gd:622`, same commit range).
@@ -351,7 +351,7 @@ keypress actually reach that effect, (3) does it look right on screen.
   simultaneously."
 - **Known bugs**:
   - Fixed: was applying exactly one disease, not up to three (commit
-    `210aa39`). Fixed with a seeded Fisher-Yates over up to 3 distinct
+    `45061cb`). Fixed with a seeded Fisher-Yates over up to 3 distinct
     diseases from `SUPER_BAD_DISEASES`
     (`tests/test_powerups.gd::_test_diseases`).
 - **Still to verify**: same visual-feedback caveat as plain DISEASE — the
@@ -383,6 +383,6 @@ keypress actually reach that effect, (3) does it look right on screen.
   `0x40BE02`), so it may be an intentional recreation rather than a bug —
   flagged for a decision, not fixed.
 - **Options not saved across matches** and **level preview showing only
-  background** were both fixed this session (`210aa39`, `5070741`) — not
+  background** were both fixed this session (`45061cb`, `c54e8de`) — not
   powerup issues but worth knowing they're resolved so they aren't
   re-reported as new.

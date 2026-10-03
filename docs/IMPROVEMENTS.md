@@ -11,7 +11,7 @@ history is in `docs/POWERUP_REVIEW_PLAN.md`.
 
 ### A1. The match never ends. BLOCKING.
 
-> **Done 2026-10-02 (`a2fe549`).** A won match returns the room to the lobby
+> **Done 2026-10-02 (`c6480e8`).** A won match returns the room to the lobby
 > with the roster intact; the host starts the next one. Local play already
 > ended on the victory screen and now has a test saying so.
 
@@ -41,7 +41,7 @@ Check the local path too — it may hang for the same reason or a different one.
 ### A2. Validate all thirteen powerups, over the network
 
 Single-player is live-confirmed for the gloves and kick only. Everything from
-`7e574d2` onward has never been seen by a human, and until `60d6b0a` no
+`b01bbb9` onward has never been seen by a human, and until `e47642b` no
 networked player animated at all, so nothing was really testable online.
 
 Use the T editor (`X` strip, `G` give, `N` cycle) and work through the list
@@ -49,7 +49,7 @@ in `docs/POWERUP_REVIEW_PLAN.md`, in both windows of a network game.
 
 ### A2b. When the server dies, the client kills the whole game
 
-> **Done 2026-10-02 (`a2fe549`).** Back to the main menu with the reason on
+> **Done 2026-10-02 (`c6480e8`).** Back to the main menu with the reason on
 > screen. A join nobody answers no longer hangs in CONNECTING.
 
 `main.gd:1187`:
@@ -64,14 +64,14 @@ The host quits, or their network drops, and every other player's application
 **exits**, with the reason printed to a console no player is looking at. It
 should return to the menu and say "the host ended the game" (or "connection
 lost") on screen. `_open_menu()` already exists and the lobby notice added in
-`60d6b0a` is the same shape of one-line message.
+`e47642b` is the same shape of one-line message.
 
 Same question for the host side: if the server stops, its own client should
 land somewhere sensible rather than taking the process down.
 
 ### A2c. Pause in a network game
 
-> **Done 2026-10-02 (`a2fe549`): no manual pause over a network.** The
+> **Done 2026-10-02 (`c6480e8`): no manual pause over a network.** The
 > editor's `P` says so. The editor itself now edits the server when hosting
 > (it crashed on every key before) and refuses, out loud, when joined.
 
@@ -97,7 +97,7 @@ doing nothing is exactly the failure B1 is about.
 Asked for as an improvement rather than a bug. Worth establishing first what
 the original does — MESSAGES.TXT has the strings and `screen_view.gd` draws
 the current one — then deciding. A preview existed and was fixed in
-`210aa39`, so the groundwork is there.
+`45061cb`, so the groundwork is there.
 
 ### A4. The flame's top-centre arm is a few pixels right
 
@@ -148,7 +148,7 @@ class of "is it broken or do I not have it".
 
 ### B3. Network play cannot be started from the menu
 
-> **Done 2026-10-02 (`f5f8907`).** See NETWORK_PLAN.md items 1 and 2.
+> **Done 2026-10-02 (`5170977`).** See NETWORK_PLAN.md items 1 and 2.
 
 Covered in `docs/NETWORK_PLAN.md` items 1 and 2. Today hosting and joining
 need command-line flags, and the empty-list message literally tells a player
@@ -156,7 +156,7 @@ to pass `--join ws://host:port`.
 
 ### B4. The `--` trap will catch every user
 
-> **Done 2026-10-02 (`f5f8907`).** Flags before the separator are honoured
+> **Done 2026-10-02 (`5170977`).** Flags before the separator are honoured
 > with a warning.
 
 `godot --path . --serve 47600` is silently ignored; the flags must come after
@@ -167,7 +167,7 @@ warning loudly when a known flag is seen before the separator.
 
 ### B5. Losing a connection ends your match
 
-> **Done 2026-10-02 (`3577a6a`).** Rejoining under the same name mid-match
+> **Done 2026-10-02 (`ef3c656`).** Rejoining under the same name mid-match
 > reclaims the seat, colour and score; an AI holding it hands it back.
 
 There is no reconnection. A dropped player's seat empties or becomes an AI;
@@ -200,7 +200,7 @@ and one that drives keyboard events through `Keysets` rather than calling
 
 ### C2. Make snapshot completeness mechanical
 
-> **Done 2026-10-02 (`88c2412`).** `tests/test_snapshot_coverage.gd`. It
+> **Done 2026-10-02 (`d8e88fb`).** `tests/test_snapshot_coverage.gd`. It
 > found `death_tick` and `fly_height` missing on its first run — networked
 > deaths still had no animation, punched bombs no arc.
 
@@ -228,7 +228,7 @@ future bug traces back to it.
 
 ### C5. `tools/verify.sh` should refuse to run with a game open
 
-> **Done 2026-10-02 (`80a045c`).**
+> **Done 2026-10-02 (`9449dae`).**
 
 A live window holds the LAN discovery port and `test_discovery.gd` then fails
 with `cannot listen on 47601`, which looks exactly like a real regression. It

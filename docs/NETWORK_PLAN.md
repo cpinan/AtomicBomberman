@@ -24,7 +24,7 @@ wrong it fails silently.
   `scripts/net/discovery.gd`.
 - **Room codes.** `directory/` is a lookup service and `scripts/net/directory.gd`
   its client, so a game can be joined by short code instead of an IP. Wired
-  into the menu in `4eac232`. `screens.join_url` and `screens.room_code`.
+  into the menu in `412370c`. `screens.join_url` and `screens.room_code`.
 - **A dedicated server.** `--dedicated PORT`, plus `server/` with Docker and
   nginx config.
 - **The refusal text** at `screens.gd:240` — "no server to join: start with
@@ -35,7 +35,7 @@ wrong it fails silently.
 
 ## 1. "Start Network Game" must explain itself
 
-> **Done 2026-10-02 (`f5f8907`)**: the host's lobby shows the LAN address,
+> **Done 2026-10-02 (`5170977`)**: the host's lobby shows the LAN address,
 > how others join, and the port to forward. Not done: the room code needs a
 > directory service, which still only `--directory` provides.
 
@@ -60,7 +60,7 @@ friend how to reach it, using only what is on screen.
 
 ## 2. "Join Network Game" needs a real browser screen
 
-> **Mostly done 2026-10-02 (`f5f8907`)**: the field takes the host's
+> **Mostly done 2026-10-02 (`5170977`)**: the field takes the host's
 > address, the empty state says what to do, and every failure reaches the
 > screen with its reason. Not done: a scrollable list of more than three
 > games, and player counts in the LAN announce.
@@ -89,9 +89,9 @@ the menu — no flags, no URL typed by hand.
 ## 3. Audit the network logic
 
 > **Progress 2026-10-02**: snapshot completeness is now a test and found two
-> more missing fields (`88c2412`); match end and reconnection fixed
-> (`a2fe549`, `3577a6a`); duplicate names no longer block a join
-> (`f5f8907`). Still open: sounds when a client is behind, and a host
+> more missing fields (`d8e88fb`); match end and reconnection fixed
+> (`c6480e8`, `ef3c656`); duplicate names no longer block a join
+> (`5170977`). Still open: sounds when a client is behind, and a host
 > whose window stops polling.
 
 Three real faults turned up in one session of live testing, all invisible to a
@@ -100,14 +100,14 @@ client that drives it. Assume more.
 
 Already fixed, as evidence of the shape to look for:
 
-- **Actions dropped between ticks** (`ce587bc`). The client sends input once
+- **Actions dropped between ticks** (`3ad767e`). The client sends input once
   per rendered frame, the server ticks at 20 Hz, and every packet was applied
   straight to the sim — so the `NONE`s after a press overwrote it. Every
   edge-triggered action over the wire was lost about five times in six.
-- **The lobby reaped waiting players** (`60d6b0a`). The silent-peer timer ran
+- **The lobby reaped waiting players** (`e47642b`). The silent-peer timer ran
   in a room with no round, where clients legitimately say nothing, so everyone
   was dropped after 30 s while still connected.
-- **Animation timers never crossed the wire** (`60d6b0a`). A client draws only
+- **Animation timers never crossed the wire** (`e47642b`). A client draws only
   what the snapshot carries; `death_anim`, `kick_ticks`, `punch_ticks`,
   `cornerhead` were missing, so nobody animated dying, kicking or punching.
 
@@ -133,7 +133,7 @@ none from reading code.
 
 ## 4. Document creating and joining (items 4 and 5 are the same job)
 
-> **Done 2026-10-02 (`6b2ba41`)**: `docs/MULTIPLAYER.md` section 0.
+> **Done 2026-10-02 (`11dcc17`)**: `docs/MULTIPLAYER.md` section 0.
 
 `docs/MULTIPLAYER.md` covers the terminal already. What is missing is the
 player-facing half, which should live in-game and in a short page:
@@ -157,8 +157,8 @@ own comments state intent), **the printed manual** as a PDF in a CD rip, and
 
 - **The win-round screen and the scoreboard** — not yet compared at all.
   What does the original show between rounds, and at match end? MESSAGES.TXT
-  has the strings; `scripts/core/match.gd` and the roulette (`5070741`,
-  `210aa39`) are the code.
+  has the strings; `scripts/core/match.gd` and the roulette (`c54e8de`,
+  `45061cb`) are the code.
 - **Options and configuration** — every switch on OPTIONS.BM against what the
   port implements, and whether each is honoured in network play (the port
   already forces Gold Bomberman off over a network, per OPTIONS.BM).
