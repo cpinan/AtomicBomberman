@@ -4,11 +4,9 @@ _Last updated: 2026-10-02 · branch `main` · 0 uncommitted files, all pushed_
 
 ## Next action
 
-Finish the live QA pass from 2026-10-02 on two machines: joining from the
-menu was confirmed working by the user that day (two windows, one machine);
-still unseen by a human are the match-end return to the lobby, rejoining a
-dropped game, punched-bomb arcs and death animations on the guest, and the
-flame joint (A4). Then `docs/IMPROVEMENTS.md` A2, every powerup online.
+`docs/IMPROVEMENTS.md` A2 — every powerup in a network game, with the T
+editor on the host (`N` to pick, `G` to give). The 2026-10-02 network and
+flame work was live-tested by the user that day and passed.
 
 ## State
 
@@ -24,8 +22,10 @@ flame joint (A4). Then `docs/IMPROVEMENTS.md` A2, every powerup online.
   carry it). Joiners and `P` (pause) are refused with a message.
 - `tests/test_snapshot_coverage.gd` fails for any field game_view.gd reads
   that no snapshot carries. It found `death_tick` and `fly_height` missing.
-- Of the 2026-10-02 work, only hosting and joining from the menu has been
-  seen by a human; the rest is verified by tests and rendered screenshots.
+- All of the 2026-10-02 work was live-tested by the user on 2026-10-02
+  (two windows, one machine): hosting and joining from the menu, deaths and
+  punched-bomb arcs on the guest, editor refusals, match end and play
+  again, rejoin, on-screen failures, and the flame joint.
 
 ## In flight
 
