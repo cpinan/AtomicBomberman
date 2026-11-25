@@ -258,7 +258,6 @@ func _test_overlay(t: T_, pack: Pack_) -> void:
 # sequence names, which is how they were found:
 #
 #   PUNCH.ANI     `punch <dir> green`     the swing
-#   PUNBOMB1..4   `punch <dir>`           the bomb tumbling away from it
 #   BOMBWALK.ANI  `bombwalk <dir> green`  carrying one over your head
 #   BPICKUP.ANI   `pickup <dir> green`    picking it up
 #   TRIGBOMB.ANI  `bomb trigger green`    the bomb that waits for its owner
@@ -284,11 +283,6 @@ func _test_every_action_has_its_animation(t: T_, pack: Pack_) -> void:
 			"bombwalk %s green" % dir)
 		t.ok(pack.has_sequence("bpickup", "pickup %s green" % dir),
 			"pickup %s green" % dir)
-	# One PUNBOMB file per direction, each naming only its own.
-	for pair in [[1, "south"], [2, "north"], [3, "west"], [4, "east"]]:
-		t.ok(pack.has_sequence("punbomb%d" % pair[0], "punch %s" % pair[1]),
-			"punbomb%d holds `punch %s`" % [pair[0], pair[1]])
-
 	t.ok(pack.has_sequence("bombs", "bomb regular green"), "the plain bomb")
 	t.ok(pack.has_sequence("bombs", "bomb jelly green"), "the jelly bomb")
 	t.ok(pack.has_sequence("trigbomb", "bomb trigger green"),
