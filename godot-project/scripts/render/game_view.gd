@@ -647,24 +647,8 @@ func draw_bombs_of(on: CanvasItem, slot: int) -> void:
 			lift = -float(b.fly_height) * 4.0 * f * (1.0 - f)
 		var at := Const_.actor_anchor(Vector2(b.x, b.y) / CP
 			+ Vector2(0, lift))
-		# A BOMB IN THE AIR is its own animation — PUNBOMB1..4, one file per
-		# direction, ten frames of it tumbling. Punched bombs used to slide
-		# through the air on the standing frame.
-		#
-		# PUNBOMB has one tumble per direction shared by every bomb kind — the
-		# disc has no jelly-specific flight art (checked: each punbombN sheet
-		# holds exactly one "punch <dir>" sequence). Using it for a jelly bomb
-		# mid-arc makes it look like a plain thrown bomb until it lands, which
-		# is the one moment jelly's own identity (the BOMBS.ANI wobble) drops
-		# out. So a jelly bomb keeps its own look through the whole arc instead
-		# of borrowing the generic tumble.
-		if b.flying and not b.jelly_bounce:
-			var sheet := "punbomb%d" % _punbomb_sheet(b.move_dir)
-			var seq := "punch %s" % _compass(b.move_dir)
-			if pack.has_sequence(sheet, seq):
-				_draw_seq_frame(sheet, seq, at, b.fly_tick, true,
-					Color.WHITE, on, true)
-				continue
+		# A bomb stays a bomb while airborne. This applies both to a throw and
+		# to a Boxing Glove punch; PUNBOMB1..4 is not used as the flight sprite.
 		_draw_bomb_frame(on, b, at, age)
 
 
@@ -692,15 +676,6 @@ func _draw_bomb_frame(on: CanvasItem, b, at: Vector2, age: int) -> void:
 			return
 
 
-## PUNBOMB1..4 are south, north, west, east — the order the files are in, and
-## the order their own sequence names give.
-static func _punbomb_sheet(dir: int) -> int:
-	match dir:
-		Types_.Dir.DOWN: return 1
-		Types_.Dir.UP: return 2
-		Types_.Dir.LEFT: return 3
-		Types_.Dir.RIGHT: return 4
-	return 1
 
 
 ## Flame cells owned by one slot. After a chain reaction the owner is the

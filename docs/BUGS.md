@@ -1748,8 +1748,6 @@ never names.** Every one of them is a sequence with its own file and its own
 name:
 
 * `PUNCH.ANI` — `punch <dir> green`. Punching looked like standing still.
-* `PUNBOMB1..4` — `punch <dir>`, the bomb tumbling away. A punched bomb slid
-  through the air on its standing frame.
 * `BOMBWALK.ANI` — `bombwalk <dir> green`, the player with a bomb over its
   head. Carrying one looked exactly like not carrying one, and the bomb was
   drawn a second time at the carrier's feet.
@@ -1873,18 +1871,9 @@ established, and it held again.
 | 5 | AI movement is very erratic | Real, and measured: `_any_open_move()`, the wander fallback, re-rolled a brand-new random direction from scratch every single tick — 20 times a second — with no persistence at all, so an idle bot visibly vibrated rather than walking anywhere. The original's own catch-all handler (table slot 7, `0x40A81F`, already cited in this file's own header comment) keeps a persisted facing and only reconsiders it 1-in-25 ticks; the port had never implemented that half. Measured on an open field, 300 ticks, nothing nearby: **75% of ticks changed direction before the fix, 5% after** — matching the original's ~1-in-25 within sampling noise |
 | 6 | No death animation when there's no way to avoid a bomb | `sim.gd`'s own header comment promises `DEATH_TICKS` (100 ticks, 5s) is sized so every one of the 24 death animations gets to finish — but the round/match transition timer, `Match_.intermission_ticks()` (`SCREEN_MIN_SECONDS` × 20 = **60 ticks**), is shorter. `_check_round_over()` drops a dying player from `standing` the instant `kill()` sets `dying`, so a cornered kill — which is usually the round-deciding one, exactly "no way to avoid it" — could end the round on the same tick the animation started, and the next round tore the `Sim` down at 60 ticks, well before a longer animation (up to XPLODE4's 93 steps) finished. Fixed: new `Sim.anyone_dying()` (`p.dying and p.alive` — `dying` alone never clears, so testing it bare would stall the round forever after any death) gates both round-transition points in `main.gd` |
 
-**And one live report that wasn't a bug at all.** "Gauntlet-thrown bombs
-render the player instead of the bomb" — traced with a windowed probe all
-the way through: `carried_by`, `pickup_pause`, and `flying` all transition
-correctly, and the flying-bomb draw path correctly finds and draws
-`PUNBOMB4.ANI`'s `punch east` sequence. That sprite is a small green
-humanoid figure — because it is the disc's own art for a flying bomb in
-this game's chibi-robot style, decoded straight from `PUNBOMB4.ANI` with
-`tools/anifile.py` independent of the runtime pack, pixel-identical to what
-renders. Every character in Atomic Bomberman is bomb-shaped; a flying bomb
-apparently looks like a small bomberman rather than a plain sphere on the
-original's own art, which reads as "the player" at a glance and is not a
-defect anywhere in this pipeline.
+**Flight art corrected after a live report.** Both a bomb punched by the
+Boxing Glove and a bomb thrown by Grab/Throw use the normal bomb frame and
+variant while airborne. `PUNBOMB1..4` is not used for either action.
 
 ## 3. Corrections made to this project's own documents
 
